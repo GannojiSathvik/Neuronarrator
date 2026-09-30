@@ -90,6 +90,9 @@ export const useNeuroVoice = () => {
 
   const stopCurrentAudio = useCallback(() => {
     clearTimers();
+    // Invalidate any in-flight speak() so its late response (or abort error) is discarded
+    // rather than played or routed to the browser-TTS fallback.
+    speakGeneration += 1;
     // Abort any pending TTS fetch
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -135,6 +138,8 @@ export const useNeuroVoice = () => {
           text,
           speaker: options.speaker ?? "anushka",
         },
+        // Lets stopCurrentAudio() cancel the request instead of letting it finish unused.
+        signal: controller.signal,
       });
 
       // If a newer speak() was called while we were waiting, discard this result

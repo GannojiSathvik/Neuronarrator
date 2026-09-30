@@ -6,6 +6,18 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
+function badRequest(message: string): Response {
+  return new Response(
+    JSON.stringify({ error: message }),
+    { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
+const VALID_MODES = ["general", "reader", "currency", "finder"];
+// A 1280x720 JPEG frame from LiveCamera is well under 1 MB of base64.
+const MAX_IMAGE_BASE64_LENGTH = 5_000_000;
+const MAX_KNOWN_FACES = 20;
+
 // Vision models — try primary first, fallback if over capacity
 const VISION_MODELS = [
   "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -122,14 +134,45 @@ serve(async (req) => {
       );
     }
 
-    const { imageBase64, mode = "general", knownFaces = [], previousDescription = "", targetItem = "" } = await req.json();
-      
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("Request body must be valid JSON");
+    }
+    if (!body || typeof body !== "object") {
+      return badRequest("Request body must be a JSON object");
+    }
+
+    const {
+      imageBase64,
+      mode = "general",
+      knownFaces = [],
+      previousDescription: rawPreviousDescription = "",
+      targetItem: rawTargetItem = "",
+    } = body;
+
     if (!imageBase64) {
       return new Response(
         JSON.stringify({ error: "No image provided" }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+    if (typeof imageBase64 !== "string" || imageBase64.length > MAX_IMAGE_BASE64_LENGTH) {
+      return badRequest("imageBase64 must be a base64 string under 5 MB");
+    }
+    if (!VALID_MODES.includes(mode)) {
+      return badRequest(`mode must be one of: ${VALID_MODES.join(", ")}`);
+    }
+    if (!Array.isArray(knownFaces) || knownFaces.length > MAX_KNOWN_FACES) {
+      return badRequest(`knownFaces must be an array of at most ${MAX_KNOWN_FACES} entries`);
+    }
+    if (typeof rawPreviousDescription !== "string" || typeof rawTargetItem !== "string") {
+      return badRequest("previousDescription and targetItem must be strings");
+    }
+    // Both are interpolated into the prompt; cap them so one request can't send an essay.
+    const previousDescription = rawPreviousDescription.slice(0, 1000);
+    const targetItem = rawTargetItem.slice(0, 100);
 
     // Select system prompt based on mode
     let systemPrompt: string;
@@ -410,9 +453,9 @@ serve(async (req) => {
 
   } catch (error) {
     console.error("Edge function error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Internal server error";
+    // Details stay in the server log; don't echo internal error text to the client.
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

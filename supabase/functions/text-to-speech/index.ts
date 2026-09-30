@@ -5,6 +5,15 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
+function badRequest(message: string): Response {
+  return new Response(
+    JSON.stringify({ error: message }),
+    { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
+const VALID_SPEAKERS = ["anushka", "abhilash"];
+
 // Simple in-memory rate limiter: max 1 request per 2 seconds per client
 const lastRequestTime = new Map<string, number>();
 const RATE_LIMIT_MS = 2000;
@@ -46,13 +55,23 @@ serve(async (req) => {
       );
     }
 
-    const { text, speaker = "anushka" } = await req.json();
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      return badRequest("Request body must be valid JSON");
+    }
+    const { text, speaker = "anushka" } = body ?? {};
 
-    if (!text || !text.trim()) {
+    if (typeof text !== "string" || !text.trim()) {
       return new Response(
         JSON.stringify({ error: "No text provided" }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    if (!VALID_SPEAKERS.includes(speaker)) {
+      return badRequest(`speaker must be one of: ${VALID_SPEAKERS.join(", ")}`);
     }
 
     // Truncate text to 500 chars max to keep response fast
@@ -103,8 +122,8 @@ serve(async (req) => {
       const errorText = await response.text();
       console.error("Sarvam TTS API error:", response.status, errorText);
       return new Response(
-        JSON.stringify({ error: `TTS API error: ${response.status}`, details: errorText }),
-        { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: `TTS API error: ${response.status}` }),
+        { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -128,9 +147,9 @@ serve(async (req) => {
 
   } catch (error) {
     console.error("Edge function error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Internal server error";
+    // Details stay in the server log; don't echo internal error text to the client.
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

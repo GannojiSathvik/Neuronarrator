@@ -61,7 +61,7 @@ function speakFeedback(text: string) {
   }
 }
 
-function parseCommand(transcript: string): { mode: CommandMode; targetItem: string } | null {
+export function parseCommand(transcript: string): { mode: CommandMode; targetItem: string } | null {
   const lower = transcript.toLowerCase().trim();
 
   // Check currency patterns

@@ -1,193 +1,159 @@
-# NeuroNarrator 👁️‍🗨️
+# NeuroNarrator
 
-**An AI-powered assistive vision app for blind and visually impaired users.**
+An assistive web app for blind and visually impaired people. It watches through the phone camera, describes the scene out loud, reads Indian Rupee notes, helps find a named object, and recognises people the user has saved. It is operated by touch and voice rather than buttons.
 
-NeuroNarrator uses your device camera, real-time AI vision, voice commands, and multi-sensory feedback (speech, haptics, spatial audio) to describe the world around you — like having a caring friend walking beside you.
+> **Status:** prototype. The original version was generated with [Lovable](https://lovable.dev) and is published by its owner at <https://neuronarrator.lovable.app>. This repository keeps that full commit history and adds later fixes (see [Credits](#credits)).
 
----
+## Features
 
-## 🎯 Core Concept
+| Feature | How it works |
+|---|---|
+| **Scene description** (Standard mode) | Every captured frame is described in one or two casual sentences, with rough distances and positions. |
+| **Currency reader** | Identifies Indian Rupee notes and coins and says the total. |
+| **Item finder** | "Find my keys": a high ping and vibration when the item is visible, a low thrum when it isn't, and spoken directions when found. |
+| **Hazard alerts** | The model rates each scene 1–10. Above 7 the app says "Warning", vibrates an SOS-style pattern, shows a banner and plays alarm tones. |
+| **Face recognition** | Runs in the browser with face-api.js. Say "Neuro remember Ronit" while someone is in view, and later descriptions use their name, relationship and how long since you last saw them. |
+| **Voice control** | Hold anywhere to speak a command (push-to-talk), or say "Neuro …" hands-free. Recognition uses the browser's Web Speech API tuned for Indian English (`en-IN`). |
+| **Speech output** | Sarvam AI text-to-speech; falls back to the browser's built-in voice if that fails. |
+| **Haptic Braille** | The first words of a hazard warning are vibrated as Braille patterns. |
 
-The entire app is designed as a **voice-first, touch-first** interface. There are no small buttons or complex menus. The full screen is an invisible button — hold anywhere to speak a command, release to execute.
+## Architecture
 
----
-
-## ✨ Features
-
-### 🗣️ Three Vision Modes
-
-| Mode | Trigger Command | What It Does |
-|------|----------------|--------------|
-| **Standard** | "Describe" / "Read" / "What is this" | Describes the scene in natural, friendly language with spatial cues ("5 steps ahead there's a chair") |
-| **Currency Reader** 💰 | "Count notes" / "Money" / "Currency" | Identifies Indian Rupee denominations (₹10–₹2000), counts multiple notes, and sums the total |
-| **Item Finder** 🔍 | "Find my keys" / "Where is my bottle" | Geiger-counter-style scanning — high-pitch ping (800 Hz) + strong vibration when found, low-pitch thrum (200 Hz) when not |
-
-### 🎤 Voice Control
-
-- **Push-to-Talk**: Hold anywhere on screen → speak → release to process
-- **Hands-Free**: Say "Neuro find my keys" or "Neuro count notes" without holding
-- **Language**: Tuned for Indian English (`en-IN`) accent recognition
-- **Feedback**: Spoken confirmation on every mode switch + tactile vibration
-
-### 👤 Face Recognition
-
-- **Client-side neural networks** via `face-api.js` — no cloud upload of face data
-- **Voice registration**: Say "Neuro remember Ronit" while someone faces the camera
-- **Smart context**: "Hey, your friend Ronit is here! You haven't seen him in about a week"
-- **Privacy**: All face data stored locally via Dexie.js (IndexedDB)
-
-### ⚠️ Hazard Detection
-
-- **10-level priority system** from casual awareness (1) to life-threatening (10)
-- **Aggressive fire/smoke detection**: Any flame triggers Priority 8+ with SOS vibration, red screen border, and urgent speech
-- **Haptic Braille**: Hazard keywords encoded in vibration patterns
-- **Spatial audio**: Hazard sounds scaled by danger level
-
-### 🔊 Multi-Sensory Feedback
-
-| Channel | Usage |
-|---------|-------|
-| **Speech (TTS)** | Scene descriptions, currency totals, item locations — via Lovable Cloud backend function |
-| **Haptic vibration** | SOS patterns for hazards, confirmation pulses for mode switches, Braille encoding |
-| **Spatial audio** | Finder ping/thrum (800 Hz / 200 Hz), hazard alarm tones, listening chimes |
-| **Visual borders** | 🟢 Green = Currency Mode · 🟡 Yellow (pulsing) = Finder Mode · 🔵 Blue = Standard Mode |
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│                   Frontend (React)               │
-│                                                   │
-│  LiveCamera ──→ base64 frame ──→ analyzeImage()  │
-│       ↑                              ↓            │
-│  Push-to-Talk        Lovable Cloud Edge Function  │
-│  (useVoiceControl)    (analyze-image)             │
-│       ↓                              ↓            │
-│  Mode Switch         ┌──────────────────────┐    │
-│  (standard/           │  Google Gemini 3     │    │
-│   currency/           │  Vision AI           │    │
-│   finder)             │  (multimodal)        │    │
-│                       └──────────────────────┘    │
-│       ↓                              ↓            │
-│  useNeuroVoice ←── description ──────┘            │
-│  useHaptics                                       │
-│  useFinderSound                                   │
-│  useHazardSound                                   │
-│  useFaceRecognition (client-side)                 │
-└─────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  subgraph Browser["Browser (React SPA)"]
+    Cam[Camera frame<br/>react-webcam] --> Loop[Capture loop<br/>pages/Index.tsx]
+    Mic[Microphone] --> Voice[Web Speech API<br/>voice commands]
+    Voice --> Loop
+    Loop --> Face[face-api.js<br/>face matching]
+    Face <--> IDB[(IndexedDB via Dexie<br/>face descriptors)]
+    Loop --> Out[Speech · tones · vibration]
+  end
+  Loop -- "frame + mode" --> AI[analyze-image]
+  Out -- text --> TTS[text-to-speech]
+  subgraph Edge["Supabase Edge Functions (Deno)"]
+    AI
+    TTS
+    STT[speech-to-text]
+  end
+  AI --> Groq[Groq: Llama 4 Scout → Maverick]
+  AI -. fallback .-> Claude[Anthropic: Claude]
+  AI -. fallback .-> Gemini[Lovable gateway: Gemini 2.5 Flash]
+  TTS --> Sarvam[Sarvam AI]
+  STT --> Sarvam
 ```
 
-### Key Hooks
+There is no server-side database and no user login. Everything the app remembers (saved faces) lives in the browser's IndexedDB.
 
-| Hook | Purpose |
-|------|---------|
-| `useVoiceControl` | Push-to-talk via Web Speech API; parses commands into modes |
-| `useVoiceCommand` | Always-on listener for hands-free "Neuro ..." commands |
-| `useNeuroVoice` | Text-to-speech via backend function with queue management |
-| `useHaptics` | Vibration patterns (SOS, confirmation, Braille) |
-| `useFinderSound` | 800 Hz found-ping / 200 Hz not-found-thrum via Web Audio API |
-| `useHazardSound` | Priority-scaled alarm tones |
-| `useFaceRecognition` | face-api.js detection + Dexie.js local storage |
-| `useHapticBraille` | Encodes text to Braille vibration patterns |
+### How a frame flows through the app
 
-### Backend Functions (Lovable Cloud)
+1. The user taps the screen. The camera starts, and a frame is captured about 1.5 s later.
+2. In Standard mode, face-api.js looks for a face first, with a 2 s timeout. A match within Euclidean distance 0.55 of a saved face adds that person's name, relation and last-seen time to the request. An unknown face pauses narration for 5 s so the user can say "Neuro remember <name>".
+3. The frame goes to the `analyze-image` edge function, which picks a system prompt for the mode and asks a vision model for JSON (`description`, `text_content`, `hazards`, `priority`, and `found` in finder mode). It tries Groq's Llama 4 Scout, then Llama 4 Maverick, then Claude, then Gemini, depending on which API keys are configured.
+4. The browser speaks the answer and plays tones or vibration based on the mode and priority.
+5. **The next frame is captured only after speech finishes**, so descriptions never overlap. A watchdog restarts the loop if analysis hangs for more than 15 s or speech for more than 12 s.
 
-| Function | Purpose |
-|----------|---------|
-| `analyze-image` | Vision analysis via Google Gemini 3 (multimodal). Supports general, reader, currency, and finder system prompts. |
-| `text-to-speech` | Converts description text to speech audio |
-| `speech-to-text` | Processes voice input for commands |
-
----
-
-## 🛠️ Tech Stack
+## Tech stack
 
 | Layer | Technology |
-|-------|-----------|
-| **Framework** | React 18 + TypeScript + Vite |
-| **Styling** | Tailwind CSS + shadcn/ui |
-| **Animations** | Framer Motion |
-| **Camera** | react-webcam |
-| **Face AI** | face-api.js (TinyFaceDetector + SSD MobileNet) |
-| **Local DB** | Dexie.js (IndexedDB wrapper) |
-| **Voice Input** | Web Speech API (SpeechRecognition) |
-| **Audio Output** | Web Audio API (OscillatorNode) |
-| **Icons** | Lucide React |
-| **Backend** | Lovable Cloud (Edge Functions) |
-| **Vision AI** | Google Gemini 3 (multimodal vision) |
-| **Routing** | React Router v6 |
+|---|---|
+| Frontend | React 18, TypeScript, Vite, Tailwind CSS, shadcn/ui, framer-motion, react-webcam |
+| Browser APIs | Web Speech API (recognition), Web Audio API (tones, TTS playback), Vibration API, IndexedDB |
+| On-device ML | face-api.js (SSD MobileNet v1 + TinyFaceDetector, 68-point landmarks, 128-d face descriptors); Dexie for storage |
+| Backend | Supabase Edge Functions (Deno), hosted on Lovable Cloud |
+| Vision models | Groq `llama-4-scout-17b-16e-instruct` / `llama-4-maverick-17b-128e-instruct`; Anthropic `claude-opus-5-5` (optional fallback); Lovable gateway `google/gemini-2.5-flash` (fallback) |
+| Speech | Sarvam AI `bulbul:v2` (TTS), `saarika:v2.5` (STT) |
+| Testing | Vitest, Testing Library, jsdom |
 
----
-
-## 📱 Device Support
-
-- **Mobile (primary)**: Full-screen touch interaction, rear camera, haptic feedback
-- **Desktop/MacBook**: Front-facing camera auto-detected, keyboard-friendly
-- **Camera**: Auto-selects `environment` (rear) on mobile, `user` (front) on desktop
-
----
-
-## 🚀 Getting Started
-
-1. Open the app in a browser (Chrome recommended for Web Speech API support)
-2. Tap anywhere on screen to start the camera and scanning
-3. The AI will begin describing your surroundings automatically
-4. **Hold the screen** and speak a command to switch modes:
-   - "Count notes" → Currency Reader
-   - "Find my keys" → Item Finder  
-   - "Describe" → Standard Mode
-5. Release to process the command
-
----
-
-## 📂 Project Structure
+## Project structure
 
 ```
 src/
-├── pages/
-│   └── Index.tsx              # Main app page — camera loop, mode routing, push-to-talk
-├── components/
-│   ├── LiveCamera.tsx         # Webcam capture with auto-device detection
-│   ├── DynamicIsland.tsx      # Status indicator (mode badge, scanning state)
-│   ├── CaptionDisplay.tsx     # Live caption overlay
-│   ├── PushToTalkOverlay.tsx  # Full-screen invisible touch target + mic animation
-│   ├── FaceRecognitionOverlay.tsx  # Face detection bounding boxes
-│   ├── HapticBrailleIndicator.tsx  # Visual Braille dot display
-│   ├── WarningBanner.tsx      # Hazard alert banner
-│   ├── SettingsModal.tsx      # App settings
-│   └── AddPersonModal.tsx     # Face registration dialog
-├── hooks/
-│   ├── useVoiceControl.ts     # Push-to-talk engine (Web Speech API, en-IN)
-│   ├── useVoiceCommand.ts     # Always-on "Neuro ..." listener
-│   ├── useNeuroVoice.ts       # TTS via backend
-│   ├── useHaptics.ts          # Vibration patterns
-│   ├── useHapticBraille.ts    # Text → Braille vibration encoding
-│   ├── useFinderSound.ts      # Geiger counter audio (800Hz/200Hz)
-│   ├── useHazardSound.ts      # Priority-scaled alarm tones
-│   ├── useFaceRecognition.ts  # face-api.js + Dexie.js
-│   └── useVoiceInput.ts       # Generic voice input utility
-├── services/
-│   └── vision.ts              # API client for analyze-image edge function
-├── lib/
-│   ├── faceDatabase.ts        # Dexie.js face storage schema
-│   └── utils.ts               # Tailwind merge utility
-└── integrations/
-    └── supabase/              # Auto-generated Lovable Cloud client
-
+  pages/Index.tsx               capture loop, mode handling, watchdog, push-to-talk wiring
+  components/LiveCamera.tsx     camera feed, frame capture, camera flip
+  components/PushToTalkOverlay.tsx  full-screen touch target
+  components/FaceRecognitionOverlay.tsx, AddPersonModal.tsx  face UI
+  hooks/useFaceRecognition.ts   face-api.js detection, matching, descriptor blending
+  hooks/useNeuroVoice.ts        TTS via edge function + browser fallback
+  hooks/useVoiceControl.ts      push-to-talk command parsing
+  hooks/useVoiceCommand.ts      always-on "Neuro …" listener
+  hooks/useFinderSound.ts, useHazardSound.ts, useHaptics.ts, useHapticBraille.ts
+  lib/faceDatabase.ts           Dexie schema (NeuroMemory, v1 → v2 migration)
+  services/vision.ts            client for analyze-image
 supabase/functions/
-├── analyze-image/index.ts     # Vision AI — Groq Llama 4 → Gemini fallback
-├── text-to-speech/index.ts    # TTS backend
-└── speech-to-text/index.ts    # STT backend
+  analyze-image/                vision prompts, provider fallback, JSON parsing
+  text-to-speech/               Sarvam TTS proxy
+  speech-to-text/               Sarvam STT proxy (used by the Add Person dialog)
 ```
 
----
+## Running locally
 
-## 🌐 Live App
+Requirements: Node.js 18+ and npm.
 
-**Published**: [neuronarrator.lovable.app](https://neuronarrator.lovable.app)
+```bash
+npm ci
+npm run dev        # http://localhost:8080
+```
 
----
+Chrome is recommended, because the Web Speech API is limited in other browsers. Camera and microphone need `localhost` or HTTPS.
 
+The committed `.env` points the frontend at the original Lovable Cloud project:
 
+| Variable | Purpose |
+|---|---|
+| `VITE_SUPABASE_URL` | Supabase project URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon (publishable) key. It is meant to be public in a browser app. |
+| `VITE_SUPABASE_PROJECT_ID` | Supabase project ID |
+
+To use your own backend, create a Supabase project, deploy the functions (`supabase functions deploy`) and set their secrets:
+
+| Secret | Used by | Required |
+|---|---|---|
+| `GROQ_API_KEY` | analyze-image | at least one vision key |
+| `ANTHROPIC_API_KEY` | analyze-image (Claude fallback) | optional |
+| `LOVABLE_API_KEY` | analyze-image (Gemini fallback, Lovable Cloud only) | optional |
+| `SARVAM_API_KEY` | text-to-speech, speech-to-text | optional; without it the app uses browser TTS |
+
+## Edge function API
+
+The frontend calls all three with `supabase.functions.invoke`. Each returns JSON and answers CORS preflight.
+
+| Function | Request | Success response | Errors |
+|---|---|---|---|
+| `analyze-image` | `{ imageBase64, mode: "general"\|"reader"\|"currency"\|"finder", knownFaces?, previousDescription?, targetItem? }` | `{ text_content, description, hazards[], priority 1–10, found? }` | 400 invalid input · 500 no provider configured · 503 all models failed |
+| `text-to-speech` | `{ text, speaker?: "anushka"\|"abhilash" }` (text truncated to 500 chars) | `{ audioBase64 }` | 400 · 429 rate limited · 502 Sarvam error · 504 timeout (8 s) |
+| `speech-to-text` | `{ audioBase64 (webm), language_code?: "en-IN" }` | `{ transcript }` | 400 · 502 Sarvam error |
+
+The `reader` mode exists in the backend but the current UI never sends it.
+
+## Testing
+
+```bash
+npm test           # Vitest unit tests
+npm run lint
+npm run build
+```
+
+The tests cover push-to-talk command parsing and face registration from a voice command. The edge functions have no automated tests. They were checked by running them locally in Deno and sending requests.
+
+## Security and privacy notes
+
+- **Camera frames leave the device.** Face descriptors stay in IndexedDB, but every analysed frame, including any faces in it, is sent to the vision provider. In Standard mode the names and relations of recognised people are sent too.
+- **The edge functions are unauthenticated** (`verify_jwt = false`, CORS `*`). Anyone who finds the URLs can use the configured API quotas. Input is validated and size-limited, but there is no per-user rate limiting.
+- The text-to-speech rate limit (1 request per 2 s) is kept in memory and keyed on the Authorization header. Every user sends the same public anon key, so they all share one limit.
+- The committed Supabase key is the anon key, which is public by design. Provider API keys live only as function secrets.
+
+## Known limitations
+
+- The watchdog starts a new capture after 15 s without cancelling the stuck request. A late response can then still be spoken.
+- The TTS request's `AbortController` is never passed to the fetch, so stopping speech doesn't cancel a request already in flight.
+- face-api.js is unmaintained, loads its model weights from a third-party GitHub Pages URL, and makes the JS bundle about 1.45 MB.
+- Flipping the camera during face detection can log an uncaught face-api.js error. The app keeps running.
+- Currency phrases are matched before finder phrases, so "find my money" switches to currency mode.
+- `npm run lint` still reports issues in the original code (mostly `any` types and empty `catch` blocks).
+
+## Credits
+
+- **Concept:** Gannoji Sathvik came up with the NeuroNarrator idea.
+- **Original implementation:** G. Ronit Reddy ([Ronitreddy10/neuronarrator](https://github.com/Ronitreddy10/neuronarrator)). The app was built with Lovable, and most commits in that history were made by Lovable's bot.
+- **Later changes in this repository** (Gannoji Sathvik, with Claude as a coding assistant): fixed the lockfile so `npm ci` works, fixed saving a face from the "Neuro remember" voice command, made the camera and face-panel buttons clickable above the push-to-talk overlay, added Claude as a vision fallback, added input validation to the edge functions, and added unit tests.

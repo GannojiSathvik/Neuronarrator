@@ -64,13 +64,7 @@ function speakFeedback(text: string) {
 export function parseCommand(transcript: string): { mode: CommandMode; targetItem: string } | null {
   const lower = transcript.toLowerCase().trim();
 
-  // Check currency patterns
-  for (const pattern of CURRENCY_PATTERNS) {
-    if (lower.includes(pattern)) {
-      return { mode: "currency", targetItem: "" };
-    }
-  }
-
+  // Explicit finding commands take precedence over currency words in the item name.
   // Check finder patterns (regex-based to extract the object)
   for (const pattern of FINDER_PATTERNS) {
     const match = lower.match(pattern);
@@ -82,6 +76,13 @@ export function parseCommand(transcript: string): { mode: CommandMode; targetIte
       if (item.length >= 2) {
         return { mode: "finder", targetItem: item };
       }
+    }
+  }
+
+  // Check currency patterns
+  for (const pattern of CURRENCY_PATTERNS) {
+    if (lower.includes(pattern)) {
+      return { mode: "currency", targetItem: "" };
     }
   }
 

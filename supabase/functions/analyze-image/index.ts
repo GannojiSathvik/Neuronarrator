@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import Anthropic from "npm:@anthropic-ai/sdk@0.129.0";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -10,6 +11,22 @@ const VISION_MODELS = [
   "meta-llama/llama-4-scout-17b-16e-instruct",
   "meta-llama/llama-4-maverick-17b-128e-instruct",
 ];
+
+// Used only when every Groq model fails or GROQ_API_KEY is not set.
+const CLAUDE_MODEL = "claude-opus-5-5";
+
+// Accepts either a data URL or bare base64 (assumed JPEG, which is what LiveCamera sends).
+function toClaudeImage(imageBase64: string): Anthropic.ImageBlockParam {
+  const match = imageBase64.match(/^data:(image\/(?:jpeg|png|gif|webp));base64,(.+)$/);
+  return {
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: (match?.[1] ?? "image/jpeg") as Anthropic.Base64ImageSource["media_type"],
+      data: match?.[2] ?? imageBase64,
+    },
+  };
+}
 
 const GENERAL_PROMPT = `You're a chill, caring friend walking beside a blind person. Talk like a real human — casual, warm, not robotic. No jargon, no "I observe", no "the image shows". Just talk to them like you're right there.
 
@@ -95,8 +112,10 @@ serve(async (req) => {
 
   try {
     const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY');
-    if (!GROQ_API_KEY) {
-      console.error("GROQ_API_KEY not configured");
+    const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
+    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+    if (!GROQ_API_KEY && !ANTHROPIC_API_KEY && !LOVABLE_API_KEY) {
+      console.error("No vision provider configured (GROQ_API_KEY, ANTHROPIC_API_KEY or LOVABLE_API_KEY)");
       return new Response(
         JSON.stringify({ error: "API key not configured" }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -166,11 +185,11 @@ serve(async (req) => {
     }
 
     // Try each Groq model in order until one succeeds
-    let response: Response | null = null;
+    let content: string | null = null;
     let lastError = "";
     let usedModel = "";
 
-    for (const model of VISION_MODELS) {
+    for (const model of GROQ_API_KEY ? VISION_MODELS : []) {
       console.log("Trying Groq model:", model, "mode:", mode);
       
       try {
@@ -205,7 +224,8 @@ serve(async (req) => {
         });
 
         if (res.ok) {
-          response = res;
+          const data = await res.json();
+          content = data.choices?.[0]?.message?.content || "";
           usedModel = model;
           break;
         }
@@ -219,11 +239,58 @@ serve(async (req) => {
       }
     }
 
-    // ── Ultimate fallback: Lovable AI Gateway (Gemini) ──
-    if (!response) {
-      const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+    // ── Fallback: Claude (Anthropic API) ──
+    if (content === null && ANTHROPIC_API_KEY) {
+      console.log(GROQ_API_KEY ? "Groq failed, falling back to Claude:" : "Groq not configured, using Claude:", CLAUDE_MODEL);
+      try {
+        // The capture loop's watchdog gives up after 15s, so fail fast instead of using the
+        // SDK defaults (10-minute timeout, 2 retries).
+        const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY, timeout: 10_000, maxRetries: 0 });
+        const msg = await anthropic.beta.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 16000,
+          // Low effort keeps latency down; the capture loop waits on this call.
+          output_config: { effort: "low" },
+          // Retry on another model if Claude declines the request.
+          betas: ["server-side-fallback-2026-07-01"],
+          fallbacks: "default",
+          system: systemPrompt,
+          messages: [{
+            role: "user",
+            content: [toClaudeImage(imageBase64), { type: "text", text: userPrompt }],
+          }],
+        });
+
+        if (msg.stop_reason === "refusal") {
+          console.warn("Claude declined the request:", msg.stop_details?.category ?? "unknown");
+          lastError = `${CLAUDE_MODEL}: refusal`;
+        } else {
+          const text = msg.content
+            .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text")
+            .map((b) => b.text)
+            .join("");
+          if (text.trim()) {
+            content = text;
+            usedModel = `${msg.model} (Claude fallback)`;
+          } else {
+            console.warn("Claude returned no text, stop_reason:", msg.stop_reason);
+            lastError = `${CLAUDE_MODEL}: empty response`;
+          }
+        }
+      } catch (claudeErr) {
+        if (claudeErr instanceof Anthropic.APIError) {
+          console.error("Claude fallback failed:", claudeErr.status, claudeErr.message);
+        } else {
+          console.error("Claude fallback error:", claudeErr);
+        }
+        lastError = `${CLAUDE_MODEL}: error`;
+      }
+    }
+
+    // ── Last fallback: Lovable AI Gateway (Gemini) ──
+    if (content === null) {
       if (LOVABLE_API_KEY) {
-        console.log("All Groq models down, falling back to Lovable AI Gateway (Gemini)");
+        console.log("Earlier providers unavailable, falling back to Lovable AI Gateway (Gemini)");
         try {
           const geminiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
             method: "POST",
@@ -256,19 +323,22 @@ serve(async (req) => {
           });
 
           if (geminiRes.ok) {
-            response = geminiRes;
+            const data = await geminiRes.json();
+            content = data.choices?.[0]?.message?.content || "";
             usedModel = "google/gemini-2.5-flash (fallback)";
           } else {
             const errText = await geminiRes.text();
             console.error("Gemini fallback also failed:", geminiRes.status, errText.slice(0, 200));
+            lastError = `gemini: ${geminiRes.status}`;
           }
         } catch (geminiErr) {
           console.error("Gemini fallback fetch error:", geminiErr);
+          lastError = "gemini: fetch error";
         }
       }
     }
 
-    if (!response) {
+    if (content === null) {
       console.error("All models failed. Last error:", lastError);
       return new Response(
         JSON.stringify({ error: "All vision models are currently unavailable. Please try again in a moment." }),
@@ -278,10 +348,6 @@ serve(async (req) => {
 
     console.log("Vision response received from model:", usedModel, "mode:", mode);
 
-    const data = await response.json();
-
-    let content = data.choices?.[0]?.message?.content || "";
-    
     // Strip Llama model artifacts that corrupt JSON
     content = content.replace(/<\|[^|]*\|>/g, "").replace(/\bassistant\b/g, "");
     

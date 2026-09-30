@@ -42,6 +42,9 @@ const Index = () => {
   const lastDescriptionRef = useRef<string>("");
   const captureCountRef = useRef(0);
   const analysisStartedAtRef = useRef<number>(0);
+  // Bumped whenever a capture cycle starts or is abandoned (watchdog, stop). An async step
+  // that finishes after its cycle was superseded must not speak or touch the loop flags.
+  const analysisCycleRef = useRef(0);
 
   // Unknown-face pause: suppress TTS for 5s so user can say "neuro remember [name]"
   const unknownFacePauseUntilRef = useRef<number>(0);
@@ -203,6 +206,7 @@ const Index = () => {
         const analysisDuration = Date.now() - analysisStartedAtRef.current;
         if (analysisDuration > 15000) {
           console.warn("Watchdog: analysis stuck for 15s+, force-resetting");
+          analysisCycleRef.current += 1;
           isAnalyzingRef.current = false;
           analysisStartedAtRef.current = 0;
           setCaptureRequestId(prev => prev + 1);
@@ -238,6 +242,8 @@ const Index = () => {
     isAnalyzingRef.current = true;
     analysisStartedAtRef.current = Date.now();
     captureCountRef.current += 1;
+    const cycle = ++analysisCycleRef.current;
+    const isStale = () => cycle !== analysisCycleRef.current || !isActiveRef.current;
 
     setAnalysisState("analyzing");
 
@@ -268,6 +274,7 @@ const Index = () => {
           }
         }
       }
+      if (isStale()) return;
 
       // Unknown face pause (general mode only)
       if (hasUnknownFace && mode === "general") {
@@ -297,6 +304,10 @@ const Index = () => {
 
       // Send image to vision API with mode + targetItem
       const result = await analyzeImageService(base64, mode, knownFaces, lastDescriptionRef.current, targetItem);
+      if (isStale()) {
+        console.log("[Loop] Discarding result from an abandoned capture cycle");
+        return;
+      }
 
       setPriority(result.priority);
       setCaptionText(result.description);
@@ -356,6 +367,7 @@ const Index = () => {
         }
       }
     } catch (error) {
+      if (isStale()) return;
       console.error("Analysis error:", error);
       setAnalysisState("error");
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
@@ -363,8 +375,11 @@ const Index = () => {
       setTextContent("");
       speak("Hmm, something went wrong. Retrying.", 5, { onEnd: onSpeechEnd });
     } finally {
-      isAnalyzingRef.current = false;
-      analysisStartedAtRef.current = 0;
+      // Only the current cycle owns the flags; a late, abandoned cycle must not clear them.
+      if (cycle === analysisCycleRef.current) {
+        isAnalyzingRef.current = false;
+        analysisStartedAtRef.current = 0;
+      }
     }
   }, [speak, stop, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isBusy, forceRestartVoice]);
 
@@ -381,7 +396,9 @@ const Index = () => {
 
     setTimeout(() => {
       if (isActiveRef.current) {
-        setCaptureRequestId(1);
+        // Increment rather than set to 1: if the id is already 1 (a restart after the first
+        // capture), setting 1 again is a no-op and the loop would wait for the watchdog.
+        setCaptureRequestId(prev => prev + 1);
       }
     }, 1500);
   }, [isAutoCapturing]);
@@ -389,6 +406,8 @@ const Index = () => {
   const stopStream = useCallback(() => {
     setIsAutoCapturing(false);
     isActiveRef.current = false;
+    analysisCycleRef.current += 1;
+    isAnalyzingRef.current = false;
     captureCountRef.current = 0;
     speechStartedAtRef.current = 0;
     analysisStartedAtRef.current = 0;

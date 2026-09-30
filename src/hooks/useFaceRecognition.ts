@@ -49,7 +49,7 @@ export interface UseFaceRecognitionReturn {
   isProcessing: boolean;
   storedFacesCount: number;
   detectAndMatch: (videoElement: HTMLVideoElement) => Promise<FaceMatch | null>;
-  registerCurrentFace: (name: string, relation: RelationType) => Promise<boolean>;
+  registerCurrentFace: (name: string, relation: RelationType, descriptor?: Float32Array | null) => Promise<boolean>;
   loadModels: () => Promise<void>;
   retryLoadModels: () => Promise<void>;
   refreshStoredFaces: () => Promise<void>;
@@ -342,16 +342,19 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
     }
   }, [isModelsLoaded, refreshStoredFaces]);
 
-  // Register the current unknown face
-  const registerCurrentFace = useCallback(async (name: string, relation: RelationType): Promise<boolean> => {
-    if (!lastUnknownDescriptor) {
+  // Register the current unknown face. Callers that just ran detectAndMatch should pass the
+  // fresh descriptor explicitly: the lastUnknownDescriptor state set by that call is not yet
+  // visible inside this closure until the next render.
+  const registerCurrentFace = useCallback(async (name: string, relation: RelationType, descriptor?: Float32Array | null): Promise<boolean> => {
+    const descriptorToSave = descriptor ?? lastUnknownDescriptor;
+    if (!descriptorToSave) {
       console.warn('[Face] No unknown face to register');
       return false;
     }
 
     try {
       // Store as a plain Array for reliable IndexedDB serialization
-      await faceDB.addFace(name.trim(), lastUnknownDescriptor, relation);
+      await faceDB.addFace(name.trim(), descriptorToSave, relation);
       await refreshStoredFaces();
       setLastUnknownDescriptor(null);
 

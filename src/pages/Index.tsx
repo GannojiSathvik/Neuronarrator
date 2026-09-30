@@ -105,7 +105,7 @@ const Index = () => {
     if (lastUnknownDescriptorRef.current) {
       console.log("[VoiceRemember] Using existing unknown descriptor");
       unknownFacePauseUntilRef.current = 0;
-      const success = await registerCurrentFace(name, "Friend");
+      const success = await registerCurrentFace(name, "Friend", lastUnknownDescriptorRef.current);
       if (success) {
         speak(`Got it, I'll remember ${name}.`, 5, {});
       } else {
@@ -133,7 +133,7 @@ const Index = () => {
     }
 
     unknownFacePauseUntilRef.current = 0;
-    const success = await registerCurrentFace(name, "Friend");
+    const success = await registerCurrentFace(name, "Friend", match.descriptor);
     if (success) {
       speak(`Got it, I'll remember ${name}.`, 5, {});
     } else {

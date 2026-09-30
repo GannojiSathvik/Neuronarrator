@@ -36,7 +36,7 @@ export const FaceRecognitionOverlay = ({
   if (!isVisible) return null;
 
   return (
-    <div className="fixed top-16 left-4 right-4 z-20 flex flex-col gap-2 pointer-events-none [&>*]:pointer-events-auto">
+    <div className="fixed top-16 left-4 right-4 z-30 flex flex-col gap-2 pointer-events-none [&>*]:pointer-events-auto">
       {/* Model Loading Status */}
       <AnimatePresence>
         {isLoadingModels && (

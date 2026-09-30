@@ -118,7 +118,11 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
     height: { ideal: 720 },
   };
  
+  // The camera feed sits at z-0 under the full-screen push-to-talk overlay (z-20). A fixed
+  // element creates its own stacking context, so the interactive controls below are rendered
+  // as siblings at z-30 rather than inside the camera layer, where they could never be clicked.
   return (
+    <>
     <div className="fixed inset-0 z-0">
       {/* Mount webcam only after user gesture (cameraEnabled) for iOS Safari */}
       {cameraEnabled ? (
@@ -136,31 +140,6 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
       ) : (
         <div className="absolute inset-0 bg-black" />
       )}
-
-      {/* Camera error overlay */}
-      <AnimatePresence>
-        {cameraError && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center z-10 px-8"
-          >
-            <Camera className="w-12 h-12 text-muted-foreground mb-4" />
-            <p className="text-foreground text-center text-sm font-medium mb-2">Camera Unavailable</p>
-            <p className="text-muted-foreground text-center text-xs leading-relaxed">{cameraError}</p>
-            <button
-              onClick={() => {
-                setCameraError(null);
-                setCameraKey(prev => prev + 1);
-              }}
-              className="mt-6 px-6 py-2 rounded-full bg-surface border border-glass-border text-foreground text-sm"
-            >
-              Try Again
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Flip transition overlay */}
       <AnimatePresence>
@@ -184,19 +163,6 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
         )}
       />
 
-      {/* Camera flip button */}
-      <button
-        onClick={flipCamera}
-        disabled={isFlipping}
-        className={cn(
-          "absolute top-4 left-4 z-10 w-12 h-12 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center justify-center tactile-button",
-          isFlipping && "opacity-50"
-        )}
-        aria-label="Switch camera"
-      >
-        <SwitchCamera className={cn("w-6 h-6 text-foreground", isFlipping && "animate-spin")} />
-      </button>
- 
       {/* Analyzing indicator */}
       <AnimatePresence>
         {isAnalyzing && (
@@ -227,6 +193,46 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
         )}
       </AnimatePresence>
     </div>
+
+    {/* Camera error overlay */}
+    <AnimatePresence>
+      {cameraError && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-black/90 flex flex-col items-center justify-center z-30 px-8"
+        >
+          <Camera className="w-12 h-12 text-muted-foreground mb-4" />
+          <p className="text-foreground text-center text-sm font-medium mb-2">Camera Unavailable</p>
+          <p className="text-muted-foreground text-center text-xs leading-relaxed">{cameraError}</p>
+          <button
+            onClick={() => {
+              setCameraError(null);
+              setCameraKey(prev => prev + 1);
+            }}
+            className="mt-6 px-6 py-2 rounded-full bg-surface border border-glass-border text-foreground text-sm"
+          >
+            Try Again
+          </button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+
+    {/* Camera flip button */}
+    <button
+      onClick={flipCamera}
+      disabled={isFlipping}
+      className={cn(
+        "fixed top-4 left-4 z-30 w-12 h-12 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center justify-center tactile-button",
+        isFlipping && "opacity-50"
+      )}
+      aria-label="Switch camera"
+    >
+      <SwitchCamera className={cn("w-6 h-6 text-foreground", isFlipping && "animate-spin")} />
+    </button>
+ 
+    </>
   );
 });
 

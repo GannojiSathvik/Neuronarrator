@@ -347,7 +347,11 @@ const Index = () => {
       }
       // Handle standard/general modes
       else {
-        const speechText = result.text_content || result.description;
+        // Describe the scene first, then any text read from it. Speaking only the text would
+        // drop the description (and its obstacles) whenever a sign or screen is in view.
+        const speechText = result.text_content
+          ? `${result.description} It says: ${result.text_content}`
+          : result.description;
 
         if (result.priority > 7) {
           setAnalysisState("warning");

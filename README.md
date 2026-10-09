@@ -14,7 +14,7 @@ An assistive web app for blind and visually impaired people. It watches through 
 | **Item finder** | "Find my keys": a high ping and vibration when the item is visible, a low thrum when it isn't, and spoken directions when found. |
 | **Hazard alerts** | The model rates each scene 1–10. Above 7 the app says "Warning", vibrates an SOS-style pattern, shows a banner and plays alarm tones. |
 | **Face recognition** | Runs in the browser with face-api.js. Say "Neuro remember Ronit" while someone is in view, and later descriptions use their name, relationship and how long since you last saw them. |
-| **Voice control** | Hold anywhere to speak a command (push-to-talk): "describe", "read this", "count notes", "find my keys". Hands-free, say "Neuro describe", "Neuro read", "Neuro currency" or "Neuro find my keys". Recognition uses the browser's Web Speech API tuned for Indian English (`en-IN`). |
+| **Voice control** | Hold anywhere to speak a command (push-to-talk); it keeps listening until you let go: "describe", "read this", "count notes", "find my keys". Hands-free, say "Neuro describe", "Neuro read", "Neuro currency" or "Neuro find my keys". The app repeats back what it heard. Recognition uses the browser's Web Speech API tuned for Indian English (`en-IN`). |
 | **Speech output** | Sarvam AI text-to-speech; falls back to the browser's built-in voice if that fails. |
 | **Haptic Braille** | The first words of a hazard warning are vibrated as Braille patterns. |
 

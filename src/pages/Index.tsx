@@ -116,6 +116,10 @@ const Index = () => {
     setCommandMode,
     setTargetItem,
   } = useVoiceControl();
+  // After release, push-to-talk can take a few seconds to transcribe on the server. Don't start
+  // a capture or narrate over it; the command decides what happens next.
+  const transcribingRef = useRef(false);
+  transcribingRef.current = isVoiceControlTranscribing;
 
   // Map commandMode to VisionMode
   const mode: VisionMode = commandMode === "currency" ? "currency" 
@@ -291,7 +295,7 @@ const Index = () => {
     onClearCommand: handleVoiceClear,
     onStopCommand: handleVoiceStop,
     onModeSwitch: handleModeSwitch,
-    enabled: isAutoCapturing && !isVoiceControlListening && !addPersonOpen && !settingsOpen,
+    enabled: isAutoCapturing && !isVoiceControlListening && !isVoiceControlTranscribing && !addPersonOpen && !settingsOpen,
   });
 
   // Watchdog
@@ -352,7 +356,7 @@ const Index = () => {
   }, [isAutoCapturing, isBusy, isSpeaking, stop, speak]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
-    if (isAnalyzingRef.current || modalOpenRef.current || !isActiveRef.current || pushToTalkHeldRef.current) return;
+    if (isAnalyzingRef.current || modalOpenRef.current || !isActiveRef.current || pushToTalkHeldRef.current || transcribingRef.current) return;
     if (isBusy()) return;
     isAnalyzingRef.current = true;
     analysisStartedAtRef.current = Date.now();

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import Anthropic from "npm:@anthropic-ai/sdk@0.129.0";
+import { buildGeminiRequest, extractGeminiText, geminiUrl } from "../_shared/gemini.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -26,7 +27,15 @@ const VISION_MODELS = [
   "qwen/qwen3.8-27b",
 ];
 
-// Used only when every Groq model fails or GROQ_API_KEY is not set.
+// Provider order: Groq -> Gemini (direct, student's own key) -> Claude -> Lovable gateway.
+// Each one is tried only if its key is set and the earlier ones failed or aren't configured.
+
+// Gemini Flash models are free of charge on the Gemini API free tier (free-tier content may be
+// used by Google to improve its products). Override with the GEMINI_MODEL secret.
+// https://ai.google.dev/gemini-api/docs/models
+const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+
+// Used only when Groq and Gemini fail or aren't configured.
 const CLAUDE_MODEL = "claude-opus-5-5";
 
 // The client's capture-loop watchdog abandons a request after 15s. All providers share
@@ -146,10 +155,12 @@ serve(async (req) => {
 
   try {
     const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY');
+    const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
+    const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || DEFAULT_GEMINI_MODEL;
     const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!GROQ_API_KEY && !ANTHROPIC_API_KEY && !LOVABLE_API_KEY) {
-      console.error("No vision provider configured (GROQ_API_KEY, ANTHROPIC_API_KEY or LOVABLE_API_KEY)");
+    if (!GROQ_API_KEY && !GEMINI_API_KEY && !ANTHROPIC_API_KEY && !LOVABLE_API_KEY) {
+      console.error("No vision provider configured (GROQ_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY or LOVABLE_API_KEY)");
       return new Response(
         JSON.stringify({ error: "API key not configured" }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -252,7 +263,7 @@ serve(async (req) => {
     const deadline = Date.now() + REQUEST_BUDGET_MS;
     const timeLeft = () => deadline - Date.now();
 
-    // Try each Groq model in order until one succeeds
+    // ── Primary: Groq. Try each model in order until one succeeds ──
     let content: string | null = null;
     let lastError = "";
     let usedModel = "";
@@ -309,9 +320,51 @@ serve(async (req) => {
       }
     }
 
+    // ── Fallback: Gemini (Google's API directly, with the student's own key) ──
+    if (content === null && GEMINI_API_KEY && timeLeft() >= MIN_ATTEMPT_MS) {
+      console.log(GROQ_API_KEY ? "Groq failed, falling back to Gemini:" : "Groq not configured, using Gemini:", GEMINI_MODEL);
+      // First try with thinking set to "low" for latency. If the API rejects thinkingConfig
+      // (e.g. a GEMINI_MODEL override that doesn't support it), retry once without it.
+      for (const thinkingLevel of ["low", null]) {
+        if (timeLeft() < MIN_ATTEMPT_MS) break;
+        try {
+          const res = await fetch(geminiUrl(GEMINI_MODEL), {
+            method: "POST",
+            headers: {
+              "x-goog-api-key": GEMINI_API_KEY,
+              "Content-Type": "application/json",
+            },
+            signal: AbortSignal.timeout(timeLeft()),
+            body: JSON.stringify(buildGeminiRequest({ systemPrompt, userPrompt, imageBase64, thinkingLevel })),
+          });
+
+          if (res.ok) {
+            const { text, reason } = extractGeminiText(await res.json());
+            if (text) {
+              content = text;
+              usedModel = `${GEMINI_MODEL} (Gemini)`;
+            } else {
+              console.warn("Gemini returned no text:", reason);
+              lastError = `${GEMINI_MODEL}: ${reason}`;
+            }
+            break;
+          }
+
+          const errText = await res.text();
+          console.warn(`Gemini ${GEMINI_MODEL} failed (${res.status}):`, errText.slice(0, 200));
+          lastError = `${GEMINI_MODEL}: ${res.status}`;
+          if (!(res.status === 400 && thinkingLevel && /thinking/i.test(errText))) break;
+        } catch (geminiErr) {
+          console.warn("Gemini fetch error:", geminiErr);
+          lastError = `${GEMINI_MODEL}: fetch error`;
+          break;
+        }
+      }
+    }
+
     // ── Fallback: Claude (Anthropic API) ──
     if (content === null && ANTHROPIC_API_KEY && timeLeft() >= MIN_ATTEMPT_MS) {
-      console.log(GROQ_API_KEY ? "Groq failed, falling back to Claude:" : "Groq not configured, using Claude:", CLAUDE_MODEL);
+      console.log(GROQ_API_KEY || GEMINI_API_KEY ? "Earlier providers failed, falling back to Claude:" : "Groq and Gemini not configured, using Claude:", CLAUDE_MODEL);
       try {
         // Fail fast within the shared budget instead of using the SDK defaults
         // (10-minute timeout, 2 retries).
@@ -358,6 +411,8 @@ serve(async (req) => {
     }
 
     // ── Last fallback: Lovable AI Gateway (Gemini) ──
+    // Legacy: LOVABLE_API_KEY exists only on Lovable Cloud (where the app was first built).
+    // On your own Supabase project, use GEMINI_API_KEY above instead.
     if (content === null) {
       if (LOVABLE_API_KEY && timeLeft() >= MIN_ATTEMPT_MS) {
         console.log("Earlier providers unavailable, falling back to Lovable AI Gateway (Gemini)");

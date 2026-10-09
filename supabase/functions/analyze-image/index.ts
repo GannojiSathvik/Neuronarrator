@@ -19,9 +19,11 @@ const MAX_IMAGE_BASE64_LENGTH = 5_000_000;
 const MAX_KNOWN_FACES = 20;
 
 // Vision models — try primary first, fallback if over capacity
+// Groq shut down both Llama 4 vision models in 2026 (Maverick in March, Scout in July), so
+// every call failed and only the fallbacks answered. qwen3.8-27b is Groq's only listed vision
+// model as of Oct 2026: https://console.groq.com/docs/vision
 const VISION_MODELS = [
-  "meta-llama/llama-4-scout-17b-16e-instruct",
-  "meta-llama/llama-4-maverick-17b-128e-instruct",
+  "qwen/qwen3.8-27b",
 ];
 
 // Used only when every Groq model fails or GROQ_API_KEY is not set.
@@ -421,7 +423,10 @@ serve(async (req) => {
     // without deleting the real word "assistant" from descriptions.
     content = content
       .replace(/<\|start_header_id\|>\s*assistant\s*<\|end_header_id\|>/g, "")
-      .replace(/<\|[^|]*\|>/g, "");
+      .replace(/<\|[^|]*\|>/g, "")
+      // Qwen can emit its reasoning as <think>...</think> before the answer. Drop it so the
+      // JSON match below doesn't start inside the reasoning.
+      .replace(/<think>[\s\S]*?<\/think>/g, "");
     
     // Parse JSON from response with multiple fallback strategies
     let result: VisionResult = { text_content: "", description: "", hazards: [], priority: 5 };

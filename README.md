@@ -36,7 +36,7 @@ flowchart LR
     TTS
     STT[speech-to-text]
   end
-  AI --> Groq[Groq: Llama 4 Scout → Maverick]
+  AI --> Groq[Groq: Qwen 3.8 27B]
   AI -. fallback .-> Claude[Anthropic: Claude]
   AI -. fallback .-> Gemini[Lovable gateway: Gemini 2.5 Flash]
   TTS --> Sarvam[Sarvam AI]
@@ -49,7 +49,7 @@ There is no server-side database and no user login. Everything the app remembers
 
 1. The user taps the screen. The camera starts, and a frame is captured about 1.5 s later.
 2. In Standard mode, face-api.js looks for a face first, with a 2 s timeout. A match within Euclidean distance 0.55 of a saved face adds that person's name, relation and last-seen time to the request. An unknown face pauses narration for 5 s so the user can say "Neuro remember <name>".
-3. The frame goes to the `analyze-image` edge function, which picks a system prompt for the mode and asks a vision model for JSON (`description`, `text_content`, `hazards`, `priority`, and `found` in finder mode). It tries Groq's Llama 4 Scout, then Llama 4 Maverick, then Claude, then Gemini, depending on which API keys are configured.
+3. The frame goes to the `analyze-image` edge function, which picks a system prompt for the mode and asks a vision model for JSON (`description`, `text_content`, `hazards`, `priority`, and `found` in finder mode). It tries Groq's Qwen 3.8 27B, then Claude, then Gemini, depending on which API keys are configured. (The original Llama 4 Scout and Maverick models were shut down by Groq in 2026.)
 4. The browser speaks the answer and plays tones or vibration based on the mode and priority.
 5. **The next frame is captured only after speech finishes**, so descriptions never overlap. A watchdog restarts the loop if analysis hangs for more than 15 s or speech for more than 12 s.
 
@@ -61,7 +61,7 @@ There is no server-side database and no user login. Everything the app remembers
 | Browser APIs | Web Speech API (recognition), Web Audio API (tones, TTS playback), Vibration API, IndexedDB |
 | On-device ML | face-api.js (SSD MobileNet v1 + TinyFaceDetector, 68-point landmarks, 128-d face descriptors); Dexie for storage |
 | Backend | Supabase Edge Functions (Deno), hosted on Lovable Cloud |
-| Vision models | Groq `llama-4-scout-17b-16e-instruct` / `llama-4-maverick-17b-128e-instruct`; Anthropic `claude-opus-5-5` (optional fallback); Lovable gateway `google/gemini-2.5-flash` (fallback) |
+| Vision models | Groq `qwen/qwen3.8-27b`; Anthropic `claude-opus-5-5` (optional fallback); Lovable gateway `google/gemini-2.5-flash` (fallback) |
 | Speech | Sarvam AI `bulbul:v2` (TTS), `saarika:v2.5` (STT) |
 | Testing | Vitest, Testing Library, jsdom |
 

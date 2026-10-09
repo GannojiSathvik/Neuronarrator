@@ -63,6 +63,8 @@ const Index = () => {
   // over it or keep sending frames.
   const modalOpenRef = useRef(false);
   modalOpenRef.current = addPersonOpen || settingsOpen;
+  // While push-to-talk is held, nothing may be spoken over the mic, so no capture runs
+  const pushToTalkHeldRef = useRef(false);
 
   // Unknown-face pause: suppress TTS for 5s so user can say "neuro remember [name]"
   const unknownFacePauseUntilRef = useRef<number>(0);
@@ -277,7 +279,7 @@ const Index = () => {
   }, [isAutoCapturing, isBusy, isSpeaking, stop]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
-    if (isAnalyzingRef.current || modalOpenRef.current || !isActiveRef.current) return;
+    if (isAnalyzingRef.current || modalOpenRef.current || !isActiveRef.current || pushToTalkHeldRef.current) return;
     if (isBusy()) return;
     isAnalyzingRef.current = true;
     analysisStartedAtRef.current = Date.now();
@@ -528,12 +530,20 @@ const Index = () => {
   const handleTouchStart = useCallback(() => {
     if (!isAutoCapturing) return;
     playListeningChime();
+    // Don't let the narration talk over the mic: stop it, and abandon any in-flight capture
+    // (as a mode switch does) so its result isn't spoken while the user is talking
+    pushToTalkHeldRef.current = true;
+    stop();
+    analysisCycleRef.current += 1;
+    isAnalyzingRef.current = false;
+    analysisStartedAtRef.current = 0;
     // Release the always-on recognizer first — browsers allow only one active recognition session
     pauseVoiceCommand();
     startVoiceControl();
-  }, [isAutoCapturing, playListeningChime, pauseVoiceCommand, startVoiceControl]);
+  }, [isAutoCapturing, playListeningChime, stop, pauseVoiceCommand, startVoiceControl]);
 
   const handleTouchEnd = useCallback(() => {
+    pushToTalkHeldRef.current = false;
     stopVoiceControl();
   }, [stopVoiceControl]);
 

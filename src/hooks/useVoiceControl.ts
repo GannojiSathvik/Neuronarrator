@@ -1,8 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import {
+  normalizeTranscript,
+  segmentsFromResults,
+  transcriptCandidates,
+  type RecognitionSegment,
+} from "@/lib/voiceText";
 
 /**
  * Push-to-talk voice control hook for mode switching.
  * Uses Web Speech API with 'en-IN' for Indian English accent support.
+ * Listens continuously while the screen is held, so a pause mid-sentence doesn't cut it off.
  * 
  * Commands:
  *   "Count notes" / "Money" / "Currency" → currency mode
@@ -12,6 +19,11 @@ import { useState, useCallback, useRef, useEffect } from "react";
  */
 
 export type CommandMode = "standard" | "reader" | "currency" | "finder";
+
+export interface ParsedCommand {
+  mode: CommandMode;
+  targetItem: string;
+}
 
 interface UseVoiceControlReturn {
   isListening: boolean;
@@ -69,8 +81,9 @@ function speakFeedback(text: string) {
   }
 }
 
-export function parseCommand(transcript: string): { mode: CommandMode; targetItem: string } | null {
-  const lower = transcript.toLowerCase().trim();
+export function parseCommand(transcript: string): ParsedCommand | null {
+  // Normalised and without a leading wake word, so "Neuro, find my keys." parses like "find my keys"
+  const lower = normalizeTranscript(transcript).replace(/^neuro\s+/, "");
 
   // Explicit finding commands take precedence over currency words in the item name.
   // Check finder patterns (regex-based to extract the object)
@@ -111,13 +124,40 @@ export function parseCommand(transcript: string): { mode: CommandMode; targetIte
   return null;
 }
 
+/**
+ * Parses each whole-utterance reading (best first) and returns the first one that is a known
+ * command, so a correct lower-ranked alternative isn't lost to a garbled top one.
+ * Push-to-talk has no destructive commands, so any alternative may be used here.
+ */
+export function pickCommand(
+  segments: RecognitionSegment[],
+): { text: string; parsed: ParsedCommand | null } {
+  const candidates = transcriptCandidates(segments);
+  for (const text of candidates) {
+    const parsed = parseCommand(text);
+    if (parsed) return { text, parsed };
+  }
+  return { text: candidates[0] ?? "", parsed: null };
+}
+
+/** The short spoken echo of what was understood, so a misheard command is noticed. */
+function modeEcho(mode: CommandMode, item: string): string {
+  if (mode === "currency") return "Currency. Show me the notes.";
+  if (mode === "finder") return `Finder, ${item}.`;
+  if (mode === "reader") return "Read. Point me at the text.";
+  return "Describe.";
+}
+
 export function useVoiceControl(): UseVoiceControlReturn {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [commandMode, setCommandMode] = useState<CommandMode>("standard");
   const [targetItem, setTargetItem] = useState("");
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const finalTranscriptRef = useRef("");
+  // Every result of the session, final and interim. If the user lets go before the recognizer
+  // finalises, the interim words (already shown on screen) are used instead of being dropped.
+  const segmentsRef = useRef<RecognitionSegment[]>([]);
+  const stopTimeoutRef = useRef<number | null>(null);
 
   const startListening = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -134,11 +174,15 @@ export function useVoiceControl(): UseVoiceControlReturn {
       recognitionRef.current = null;
     }
 
-    finalTranscriptRef.current = "";
+    if (stopTimeoutRef.current) {
+      window.clearTimeout(stopTimeoutRef.current);
+      stopTimeoutRef.current = null;
+    }
+    segmentsRef.current = [];
     setTranscript("");
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = false; // Single utterance — stop on silence
+    recognition.continuous = true; // Keep listening through pauses; releasing the screen stops it
     recognition.interimResults = true;
     recognition.lang = "en-IN";
     recognition.maxAlternatives = 3;
@@ -149,23 +193,11 @@ export function useVoiceControl(): UseVoiceControlReturn {
     };
 
     recognition.onresult = (event: SpeechRecognitionEventLike) => {
-      let interim = "";
-      let final = "";
-
-      for (let i = 0; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) {
-          final += result[0].transcript;
-        } else {
-          interim += result[0].transcript;
-        }
-      }
-
-      if (final) {
-        finalTranscriptRef.current = final;
-      }
-
-      setTranscript(final || interim);
+      // In continuous mode the list holds the whole session: finalised segments, then the
+      // latest interim one. Keep them all, in order.
+      const segments = segmentsFromResults(event.results);
+      if (segments.length > 0) segmentsRef.current = segments;
+      setTranscript(transcriptCandidates(segmentsRef.current)[0] ?? "");
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
@@ -176,27 +208,21 @@ export function useVoiceControl(): UseVoiceControlReturn {
 
     recognition.onend = () => {
       setIsListening(false);
-      console.log("[VoiceControl] Listening ended, transcript:", finalTranscriptRef.current);
+      if (stopTimeoutRef.current) {
+        window.clearTimeout(stopTimeoutRef.current);
+        stopTimeoutRef.current = null;
+      }
+      // Final and interim segments alike, so words not yet finalised still count
+      const { text, parsed } = pickCommand(segmentsRef.current);
+      console.log("[VoiceControl] Listening ended, transcript:", text);
 
-      // Process the final transcript
-      const text = finalTranscriptRef.current;
       if (text) {
-        const parsed = parseCommand(text);
         if (parsed) {
           console.log("[VoiceControl] Command parsed:", parsed);
+          // Echo what was understood first, so a misheard command is obvious
+          speakFeedback(modeEcho(parsed.mode, parsed.targetItem));
           setCommandMode(parsed.mode);
           setTargetItem(parsed.targetItem);
-
-          // Speak confirmation
-          if (parsed.mode === "currency") {
-            speakFeedback("Currency Mode. Show me the notes.");
-          } else if (parsed.mode === "finder") {
-            speakFeedback(`Finder Mode. Looking for ${parsed.targetItem}.`);
-          } else if (parsed.mode === "reader") {
-            speakFeedback("Read Mode. Point me at the text.");
-          } else {
-            speakFeedback("Standard Mode. Describing scene.");
-          }
         } else {
           console.log("[VoiceControl] No command recognized in:", text);
           speakFeedback("Sorry, I didn't understand. Try saying: count notes, find keys, read this, or describe.");
@@ -216,18 +242,34 @@ export function useVoiceControl(): UseVoiceControlReturn {
     }
   }, []);
 
+  // stop(), not abort(): the recognizer finalises the words it already heard and then fires
+  // onend, which processes them and clears isListening. Clearing isListening here would let
+  // the always-on listener grab the mic before those last words are finalised.
   const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch { /* already stopped */ }
+    const recognition = recognitionRef.current;
+    if (!recognition) {
+      setIsListening(false);
+      return;
     }
-    setIsListening(false);
+    try {
+      recognition.stop();
+    } catch { /* already stopped */ }
+    // Safety net if the browser never fires onend: abort (which ends with onend in Chrome)
+    // and release the listening state either way.
+    if (stopTimeoutRef.current) window.clearTimeout(stopTimeoutRef.current);
+    stopTimeoutRef.current = window.setTimeout(() => {
+      stopTimeoutRef.current = null;
+      if (recognitionRef.current === recognition) {
+        try { recognition.abort(); } catch { /* already stopped */ }
+      }
+      setIsListening(false);
+    }, 2000);
   }, []);
 
   // Abort any active recognition session on unmount
   useEffect(() => {
     return () => {
+      if (stopTimeoutRef.current) window.clearTimeout(stopTimeoutRef.current);
       const recognition = recognitionRef.current;
       if (recognition) {
         recognition.onend = null;

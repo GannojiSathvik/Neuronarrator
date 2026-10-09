@@ -20,6 +20,8 @@ interface FaceRecognitionOverlayProps {
   isVisible: boolean;
   isVoiceListening?: boolean;
   lastVoiceCommand?: string | null;
+  // The person card is rendered next to the tracked face by the page instead
+  hidePersonCard?: boolean;
 }
 
 export const FaceRecognitionOverlay = ({
@@ -35,6 +37,7 @@ export const FaceRecognitionOverlay = ({
   isVisible,
   isVoiceListening = false,
   lastVoiceCommand,
+  hidePersonCard = false,
 }: FaceRecognitionOverlayProps) => {
   // Forgetting faces is irreversible: the first tap arms, a second tap within the window clears
   const [clearArmedAt, setClearArmedAt] = useState<number | null>(null);
@@ -55,7 +58,7 @@ export const FaceRecognitionOverlay = ({
   if (!isVisible) return null;
 
   return (
-    <div className="fixed top-16 left-4 right-4 z-30 flex flex-col gap-2 pointer-events-none [&>*]:pointer-events-auto">
+    <div className="fixed top-16 left-4 z-30 w-[min(24rem,calc(100vw-2rem))] flex flex-col gap-2 pointer-events-none [&>*]:pointer-events-auto">
       {/* Model Loading Status */}
       <AnimatePresence>
         {isLoadingModels && (
@@ -124,74 +127,15 @@ export const FaceRecognitionOverlay = ({
         )}
       </AnimatePresence>
 
-      {/* Face Recognition Result */}
+      {/* Face Recognition Result (shown beside the face instead when the face is being tracked) */}
       <AnimatePresence mode="wait">
-        {isModelsLoaded && lastMatch && (
-          <motion.div
+        {isModelsLoaded && lastMatch && !hidePersonCard && (
+          <PersonCard
             key={lastMatch.known ? lastMatch.name : 'unknown'}
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.2 }}
-            className={cn(
-              "glass-panel super-ellipse-sm p-4",
-              lastMatch.known 
-                ? "border border-ios-green/30 bg-ios-green/10" 
-                : "border border-ios-orange/30 bg-ios-orange/10"
-            )}
-          >
-            <div className="flex items-center gap-3">
-              {lastMatch.known ? (
-                <div className="w-10 h-10 rounded-full bg-ios-green/20 flex items-center justify-center">
-                  <User className="w-5 h-5 text-ios-green" />
-                </div>
-              ) : (
-                <div className="w-10 h-10 rounded-full bg-ios-orange/20 flex items-center justify-center">
-                  <UserX className="w-5 h-5 text-ios-orange" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <p className={cn(
-                  "text-lg font-semibold truncate",
-                  lastMatch.known ? "text-ios-green" : "text-ios-orange"
-                )}>
-                  {lastMatch.name}
-                </p>
-                {lastMatch.known && lastMatch.context ? (
-                  <div className="space-y-0.5">
-                    <p className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Users className="w-3 h-3" />
-                      {lastMatch.context.relation}
-                    </p>
-                    {lastMatch.context.isLongAbsence && (
-                      <p className="text-xs text-ios-orange flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        Last seen {lastMatch.context.daysSinceLastSeen} days ago
-                      </p>
-                    )}
-                    <p className="text-xs text-muted-foreground">
-                      {lastMatch.distance !== undefined ? 'Possible face match — confirm their identity' : 'Face enrollment saved'}
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    Face not recognized — say "Neuro remember [name]"
-                  </p>
-                )}
-              </div>
-              {!lastMatch.known && hasUnknownFace && (
-                <Button
-                  size="sm"
-                  onClick={onAddPerson}
-                  className="bg-ios-blue hover:bg-ios-blue/90 text-white"
-                >
-                  <UserPlus className="w-4 h-4 mr-1" />
-                  Add
-                </Button>
-              )}
-            </div>
-            {lastMatch.known && lastMatch.id !== undefined && <FaceMemoryContext personId={lastMatch.id} />}
-          </motion.div>
+            match={lastMatch}
+            hasUnknownFace={hasUnknownFace}
+            onAddPerson={onAddPerson}
+          />
         )}
       </AnimatePresence>
 
@@ -230,3 +174,79 @@ export const FaceRecognitionOverlay = ({
     </div>
   );
 };
+
+interface PersonCardProps {
+  match: FaceMatch;
+  hasUnknownFace: boolean;
+  onAddPerson: () => void;
+  // Smaller padding and a single saved note, for the panel that sits beside a face
+  compact?: boolean;
+}
+
+export const PersonCard = ({ match, hasUnknownFace, onAddPerson, compact = false }: PersonCardProps) => (
+  <motion.div
+    initial={{ opacity: 0, scale: 0.95 }}
+    animate={{ opacity: 1, scale: 1 }}
+    exit={{ opacity: 0, scale: 0.95 }}
+    transition={{ duration: 0.2 }}
+    className={cn(
+      "glass-panel super-ellipse-sm",
+      compact ? "p-3" : "p-4",
+      match.known 
+        ? "border border-ios-green/30 bg-ios-green/10" 
+        : "border border-ios-orange/30 bg-ios-orange/10"
+    )}
+  >
+    <div className="flex items-center gap-3">
+      {match.known ? (
+        <div className="w-10 h-10 rounded-full bg-ios-green/20 flex items-center justify-center">
+          <User className="w-5 h-5 text-ios-green" />
+        </div>
+      ) : (
+        <div className="w-10 h-10 rounded-full bg-ios-orange/20 flex items-center justify-center">
+          <UserX className="w-5 h-5 text-ios-orange" />
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <p className={cn(
+          "text-lg font-semibold truncate",
+          match.known ? "text-ios-green" : "text-ios-orange"
+        )}>
+          {match.name}
+        </p>
+        {match.known && match.context ? (
+          <div className="space-y-0.5">
+            <p className="text-xs text-muted-foreground flex items-center gap-1">
+              <Users className="w-3 h-3" />
+              {match.context.relation}
+            </p>
+            {match.context.isLongAbsence && (
+              <p className="text-xs text-ios-orange flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                Last seen {match.context.daysSinceLastSeen} days ago
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {match.distance !== undefined ? 'Possible face match — confirm their identity' : 'Face enrollment saved'}
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Face not recognized — say "Neuro remember [name]"
+          </p>
+        )}
+      </div>
+      {!match.known && hasUnknownFace && (
+        <Button
+          size="sm"
+          onClick={onAddPerson}
+          className="bg-ios-blue hover:bg-ios-blue/90 text-white"
+        >
+          <UserPlus className="w-4 h-4 mr-1" />
+          Add
+        </Button>
+      )}
+    </div>
+    {match.known && match.id !== undefined && <FaceMemoryContext personId={match.id} limit={compact ? 1 : 2} />}
+  </motion.div>
+);

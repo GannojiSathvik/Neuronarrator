@@ -3,11 +3,11 @@ import { BookOpen, ArrowRight } from "lucide-react";
 import { useMemoryLibrary } from "@/hooks/useMemoryLibrary";
 import { memoryExcerpt } from "@/lib/memory";
 
-export function FaceMemoryContext({ personId }: { personId: number }) {
+export function FaceMemoryContext({ personId, limit = 2 }: { personId: number; limit?: number }) {
   const { memories, loading, error } = useMemoryLibrary();
   const recent = memories
     .filter((memory) => memory.personId === personId)
-    .slice(0, 2);
+    .slice(0, limit);
   return (
     <div className="mt-3 border-t border-white/15 pt-3">
       <p className="text-xs font-medium text-white/90 flex items-center gap-2">

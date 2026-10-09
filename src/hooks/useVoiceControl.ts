@@ -82,8 +82,9 @@ function speakFeedback(text: string) {
   if (window.speechSynthesis) {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.1;
-    utterance.pitch = 1.0;
+    // Slow and slightly low for a calm, smooth female voice
+    utterance.rate = 0.9;
+    utterance.pitch = 0.95;
     utterance.volume = 1.0;
     utterance.lang = "en-IN";
     applyFemaleVoice(utterance);

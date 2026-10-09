@@ -231,8 +231,9 @@ export const useNeuroVoice = () => {
       // Fallback to browser TTS
       if (window.speechSynthesis) {
         const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = options.rate ?? 1.0;
-        utterance.pitch = options.pitch ?? 1.0;
+        // Slow and slightly low, matching the calm narration voice
+        utterance.rate = options.rate ?? 0.9;
+        utterance.pitch = options.pitch ?? 0.95;
         utterance.volume = 1.0;
         applyFemaleVoice(utterance);
 

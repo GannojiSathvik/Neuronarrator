@@ -8,6 +8,10 @@ interface CaptionDisplayProps {
   isVisible: boolean;
   priority?: number;
   mode?: VisionMode;
+  // Whether screen readers should read captions as they change (off while the app speaks them itself)
+  announce?: boolean;
+  // Error captions are always announced, even when announce is off
+  isError?: boolean;
 }
 
 // Safety: if the AI returns raw JSON instead of a clean description, extract it
@@ -28,7 +32,7 @@ function sanitizeCaption(raw: string): string {
   return raw;
 }
 
-export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general" }: CaptionDisplayProps) => {
+export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general", announce = true, isError = false }: CaptionDisplayProps) => {
   const contentKeyRef = useRef(0);
   const prevTextRef = useRef(text);
 
@@ -57,7 +61,12 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
   };
 
   return (
-    <div aria-live="polite" aria-atomic="true">
+    <>
+    {/* Errors go to a dedicated, always-mounted alert region so they're read even when the caption region is off */}
+    <p role="alert" className="sr-only">
+      {isVisible && isError ? cleanText : ""}
+    </p>
+    <div aria-live={announce && !isError ? "polite" : "off"} aria-atomic="true">
     <AnimatePresence>
       {isVisible && (hasDescription || hasTranscribedText) && (
         <motion.div
@@ -132,5 +141,6 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
       )}
     </AnimatePresence>
     </div>
+    </>
   );
 };

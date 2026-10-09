@@ -645,6 +645,11 @@ const Index = () => {
         isVisible={analysisState === "success" || analysisState === "warning" || analysisState === "error"}
         priority={priority}
         mode={mode}
+        // While auto-capturing the app speaks every result aloud, so a polite live region would make
+        // TalkBack/VoiceOver read each caption a second time over the TTS. Captions are only announced
+        // when the app isn't narrating; errors are always announced via the caption's alert region.
+        announce={!isAutoCapturing}
+        isError={analysisState === "error"}
       />
 
       {/* Haptic Braille Indicator */}

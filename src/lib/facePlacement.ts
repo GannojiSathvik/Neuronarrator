@@ -22,23 +22,51 @@ export interface PanelPlacement {
   side: PanelSide;
 }
 
-// Space kept clear at the edges: the status pill and buttons sit at the top, the
-// Memory space link and Stop control near the bottom.
-export const SAFE_MARGIN = { top: 112, bottom: 88, side: 12 };
+// Space kept clear at the edges: the status pill and buttons sit at the top, the scene
+// caption and control bar at the bottom.
+export const SAFE_MARGIN = { top: 80, bottom: 120, side: 12 };
 const GAP = 12;
 
-/** Map a box in video pixels to screen pixels for a video shown with object-fit: cover. */
-export function videoBoxToScreen(box: Rect, video: Size, screen: Size): Rect {
-  // cover scales uniformly by the larger ratio and crops the overflow equally on both sides
+/**
+ * Flip a box horizontally inside the video frame: x' = videoWidth - x - width.
+ * The detector always reads the raw (un-mirrored) camera pixels, so when the preview is drawn
+ * mirrored (a selfie view) the face appears on the other side of the screen from where the
+ * detector says it is.
+ */
+export function mirrorBox(box: Rect, videoWidth: number): Rect {
+  return { ...box, x: videoWidth - box.x - box.width };
+}
+
+/**
+ * Map a box in video pixels to screen pixels for a video shown with object-fit: cover.
+ *
+ * How the mapping works:
+ * 1. Mirroring first. If the preview is shown mirrored, flip the box inside the video frame
+ *    (x' = videoWidth - x - width) so it describes what the user actually sees.
+ * 2. Cover scale. object-fit: cover scales the video uniformly by the LARGER of the two
+ *    screen/video ratios, so the video fills the screen in both directions and one direction
+ *    overflows (a 16:9 video on a tall phone overflows left and right).
+ * 3. Crop offset. The overflow is cropped equally on both sides, so the scaled video starts at
+ *    a negative offset ((screen - video * scale) / 2). Every point is scaled, then shifted by it.
+ */
+export function videoBoxToScreen(box: Rect, video: Size, screen: Size, mirrored = false): Rect {
+  const source = mirrored ? mirrorBox(box, video.width) : box;
   const scale = Math.max(screen.width / video.width, screen.height / video.height);
   const offsetX = (screen.width - video.width * scale) / 2;
   const offsetY = (screen.height - video.height * scale) / 2;
   return {
-    x: box.x * scale + offsetX,
-    y: box.y * scale + offsetY,
-    width: box.width * scale,
-    height: box.height * scale,
+    x: source.x * scale + offsetX,
+    y: source.y * scale + offsetY,
+    width: source.width * scale,
+    height: source.height * scale,
   };
+}
+
+/** Width of the panel beside a face: about 45% of the screen like the reference HUD, but never
+ *  so narrow the name chip wraps (260px) nor wider than the screen's safe area. */
+export function facePanelWidth(screen: Size): number {
+  const preferred = Math.min(Math.max(screen.width * 0.45, 260), 440);
+  return Math.min(preferred, screen.width - SAFE_MARGIN.side * 2);
 }
 
 const clamp = (value: number, min: number, max: number) =>

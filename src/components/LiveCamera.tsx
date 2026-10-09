@@ -12,12 +12,24 @@ interface LiveCameraProps {
   smartLoopEnabled: boolean;
   captureRequestId: number;
   cameraEnabled: boolean;
+  /** Demo mode: with no camera (off, missing or blocked) show a dark gradient, not an error. */
+  demoBackdrop?: boolean;
 }
 
 export interface LiveCameraRef {
   getVideoElement: () => HTMLVideoElement | null;
+  /** Whether the preview is drawn mirrored, so face boxes must be flipped to match the screen */
+  isMirrored: () => boolean;
 }
+
+// The preview is shown exactly as the camera sees it (react-webcam's `mirrored` is off), for the
+// front camera too. If this is ever turned on, face overlays flip with it via isMirrored().
+const MIRROR_FRONT_CAMERA = false;
+const isPreviewMirrored = (facingMode: "user" | "environment") =>
+  MIRROR_FRONT_CAMERA && facingMode === "user";
  
+const DEMO_BACKDROP = "bg-gradient-to-br from-slate-900 via-slate-800 to-teal-950";
+
 export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   onCapture,
   isAutoCapturing,
@@ -26,6 +38,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   smartLoopEnabled,
   captureRequestId,
   cameraEnabled,
+  demoBackdrop = false,
 }, ref) => {
   const webcamRef = useRef<Webcam>(null);
   // Default to "user" on desktop (MacBook etc.), "environment" on mobile
@@ -38,9 +51,11 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   const isCapturingRef = useRef(false);
   const lastCaptureRequestIdRef = useRef(0);
 
+  const mirrored = isPreviewMirrored(facingMode);
   useImperativeHandle(ref, () => ({
     getVideoElement: () => webcamRef.current?.video ?? null,
-  }), []);
+    isMirrored: () => mirrored,
+  }), [mirrored]);
  
   const captureFrame = useCallback(async () => {
     if (isCapturingRef.current) return;
@@ -130,6 +145,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
           key={`camera-${cameraKey}-${facingMode}`}
           ref={webcamRef}
           audio={false}
+          mirrored={mirrored}
           screenshotFormat="image/jpeg"
           videoConstraints={videoConstraints}
           playsInline
@@ -138,8 +154,9 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
           className="absolute inset-0 w-full h-full object-cover"
         />
       ) : (
-        <div className="absolute inset-0 bg-black" />
+        <div className={cn("absolute inset-0", demoBackdrop ? DEMO_BACKDROP : "bg-black")} />
       )}
+      {cameraEnabled && demoBackdrop && cameraError && <div className={cn("absolute inset-0", DEMO_BACKDROP)} />}
 
       {/* Flip transition overlay */}
       <AnimatePresence>
@@ -163,40 +180,12 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
         )}
       />
 
-      {/* Analyzing indicator */}
-      <AnimatePresence>
-        {isAnalyzing && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute top-4 right-4 z-10 px-3 py-2 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center gap-2"
-          >
-            <Loader2 className="w-4 h-4 text-ios-blue animate-spin" />
-            <span className="text-xs font-medium text-muted-foreground">Reading...</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Recording indicator */}
-      <AnimatePresence>
-        {isAutoCapturing && !isAnalyzing && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute top-4 right-4 z-10 flex items-center gap-2 px-3 py-2 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border"
-          >
-            <div className="w-3 h-3 rounded-full bg-ios-red animate-pulse" />
-            <span className="text-xs font-medium text-foreground">LIVE</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* "Processing…" and the live/connection state are shown by the HUD's status pill */}
     </div>
 
     {/* Camera error overlay */}
     <AnimatePresence>
-      {cameraError && (
+      {cameraError && !demoBackdrop && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -225,12 +214,12 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
       onClick={flipCamera}
       disabled={isFlipping}
       className={cn(
-        "fixed top-4 left-4 z-30 w-12 h-12 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center justify-center tactile-button",
+        "fixed top-4 left-4 z-30 w-11 h-11 rounded-full bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white",
         isFlipping && "opacity-50"
       )}
       aria-label="Switch camera"
     >
-      <SwitchCamera className={cn("w-6 h-6 text-foreground", isFlipping && "animate-spin")} />
+      <SwitchCamera aria-hidden="true" className={cn("w-5 h-5 text-white", isFlipping && "motion-safe:animate-spin")} />
     </button>
  
     </>

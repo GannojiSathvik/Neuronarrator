@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { applyFemaleVoice } from "@/lib/femaleVoice";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   ArrowDown,
@@ -151,6 +152,7 @@ export default function MemoryWorkspace() {
       `${selected.name}, ${selected.relation}. From your saved note on ${dateLabel(reminder.occurredAt)}. ${memoryExcerpt(reminder.body)}`,
     );
     speech.lang = "en-IN";
+    applyFemaleVoice(speech);
     speech.rate = 0.92;
     speech.onend = () => setReading(false);
     speech.onerror = (event) => {

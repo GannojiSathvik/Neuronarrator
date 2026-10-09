@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { applyFemaleVoice } from "@/lib/femaleVoice";
 import {
   normalizeTranscript,
   segmentsFromResults,
@@ -85,6 +86,7 @@ function speakFeedback(text: string) {
     utterance.pitch = 1.0;
     utterance.volume = 1.0;
     utterance.lang = "en-IN";
+    applyFemaleVoice(utterance);
     window.speechSynthesis.speak(utterance);
   }
   // Also vibrate on mode switch for tactile confirmation

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { applyFemaleVoice } from "@/lib/femaleVoice";
 import { supabase } from "@/integrations/supabase/client";
 import { FunctionsHttpError } from "@supabase/supabase-js";
 
@@ -233,6 +234,7 @@ export const useNeuroVoice = () => {
         utterance.rate = options.rate ?? 1.0;
         utterance.pitch = options.pitch ?? 1.0;
         utterance.volume = 1.0;
+        applyFemaleVoice(utterance);
 
         utterance.onend = () => {
           console.log("[TTS] Browser TTS ended");

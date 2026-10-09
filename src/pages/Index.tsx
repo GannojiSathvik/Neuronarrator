@@ -26,10 +26,14 @@ import { cn } from "@/lib/utils";
 type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 
 const Index = () => {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const { people } = useMemoryLibrary();
   const enrollmentPerson = people.find(person => person.id === Number(params.get('person')) && !person.isSample);
   const [requestedName, setRequestedName] = useState('');
+  // Only the visible Add button links a face to the ?person= profile. A voice "remember X" or a
+  // second stranger must never overwrite that person's saved face.
+  const [linkToPerson, setLinkToPerson] = useState(false);
+  const linkingPerson = linkToPerson ? enrollmentPerson : undefined;
   const [analysisState, setAnalysisState] = useState<AnalysisState>("idle");
   const [isAutoCapturing, setIsAutoCapturing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -66,7 +70,7 @@ const Index = () => {
   const { speak, stop, isSpeaking, isBusy } = useNeuroVoice();
   const { sosPattern } = useHaptics();
   const { playHapticMessage, stopHaptic, isPlaying: isHapticPlaying, currentChar, currentDots } = useHapticBraille();
-  const { playHazardSound } = useHazardSound();
+  const { playHazardSound, unlock: unlockHazardSound } = useHazardSound();
   const { playFoundPing, playNotFoundThrum, playListeningChime } = useFinderSound();
 
   // Voice control for mode switching (push-to-talk)
@@ -169,6 +173,7 @@ const Index = () => {
     }
 
     setRequestedName(name);
+    setLinkToPerson(false);
     setAddPersonOpen(true);
     stop();
   }, [isModelsLoaded, detectAndMatch, speak, stop]);
@@ -429,6 +434,7 @@ const Index = () => {
     unknownFacePauseUntilRef.current = 0;
 
     unlockAudioForMobile();
+    unlockHazardSound();
 
     setTimeout(() => {
       if (isActiveRef.current) {
@@ -437,7 +443,7 @@ const Index = () => {
         setCaptureRequestId(prev => prev + 1);
       }
     }, 1500);
-  }, [isAutoCapturing]);
+  }, [isAutoCapturing, unlockHazardSound]);
 
   const stopStream = useCallback(() => {
     setIsAutoCapturing(false);
@@ -479,7 +485,12 @@ const Index = () => {
   }, [isAutoCapturing, startStream, stopStream]);
 
   const handleRegisterFace = async (name: string, relation: RelationType): Promise<boolean> => {
-    const success = await registerCurrentFace(name, relation, { personId: enrollmentPerson?.id });
+    const success = await registerCurrentFace(name, relation, { personId: linkingPerson?.id });
+    if (success && linkingPerson) {
+      // One enrollment per link: later Add presses register new people, not this one again.
+      setLinkToPerson(false);
+      setParams({}, { replace: true });
+    }
     if (success) {
       speak(`Face saved as ${name}, your ${relation.toLowerCase()}`, 5, {});
     }
@@ -553,7 +564,7 @@ const Index = () => {
         lastMatch={lastMatch}
         hasUnknownFace={!!lastUnknownDescriptor}
         storedFacesCount={storedFacesCount}
-        onAddPerson={() => { setRequestedName(''); setAddPersonOpen(true); stop(); }}
+        onAddPerson={() => { setRequestedName(''); setLinkToPerson(true); setAddPersonOpen(true); stop(); }}
         onClearFaces={handleClearFaces}
         onRetryModels={retryLoadModels}
         isVisible={isAutoCapturing || isLoadingModels || !!modelLoadError}
@@ -642,9 +653,9 @@ const Index = () => {
         isOpen={addPersonOpen}
         onClose={() => setAddPersonOpen(false)}
         onSave={handleRegisterFace}
-        initialName={enrollmentPerson?.name ?? requestedName}
-        initialRelation={enrollmentPerson?.relation ?? 'Acquaintance'}
-        existingPerson={!!enrollmentPerson}
+        initialName={linkingPerson?.name ?? requestedName}
+        initialRelation={linkingPerson?.relation ?? 'Acquaintance'}
+        existingPerson={!!linkingPerson}
       />
     </div>
   );

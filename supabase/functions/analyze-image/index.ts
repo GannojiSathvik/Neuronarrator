@@ -19,13 +19,21 @@ const MAX_IMAGE_BASE64_LENGTH = 5_000_000;
 const MAX_KNOWN_FACES = 20;
 
 // Vision models — try primary first, fallback if over capacity
+// Groq shut down both Llama 4 vision models in 2026 (Maverick in March, Scout in July), so
+// every call failed and only the fallbacks answered. qwen3.8-27b is Groq's only listed vision
+// model as of Oct 2026: https://console.groq.com/docs/vision
 const VISION_MODELS = [
-  "meta-llama/llama-4-scout-17b-16e-instruct",
-  "meta-llama/llama-4-maverick-17b-128e-instruct",
+  "qwen/qwen3.8-27b",
 ];
 
 // Used only when every Groq model fails or GROQ_API_KEY is not set.
 const CLAUDE_MODEL = "claude-opus-5-5";
+
+// The client's capture-loop watchdog abandons a request after 15s. All providers share
+// this budget so the function answers (or gives up) before the client stops listening.
+const REQUEST_BUDGET_MS = 13_000;
+// Not worth starting a provider call with less time than this left.
+const MIN_ATTEMPT_MS = 1_000;
 
 // Accepts either a data URL or bare base64 (assumed JPEG, which is what LiveCamera sends).
 function toClaudeImage(imageBase64: string): Anthropic.ImageBlockParam {
@@ -101,6 +109,20 @@ Rules:
 - Do NOT describe the scene. ONLY talk about money.
 
 CRITICAL: Output ONLY the JSON object. No markdown, no backticks, no extra words.`;
+
+interface KnownFace {
+  name: string;
+  relation: string;
+  daysSinceLastSeen?: number;
+}
+
+interface VisionResult {
+  text_content: string;
+  description: string;
+  hazards: string[];
+  priority: number;
+  found?: boolean;
+}
 
 const buildFinderPrompt = (targetItem: string) => `You are helping a blind person find a specific item. The item they are looking for is: "${targetItem}".
 
@@ -208,7 +230,7 @@ serve(async (req) => {
 
     // Add known faces context for general mode
     if (knownFaces.length > 0 && mode === "general") {
-      const faceLines = knownFaces.map((f: any) => {
+      const faceLines = knownFaces.map((f: KnownFace) => {
         let line = `${f.name} — ${f.relation}`;
         if (f.daysSinceLastSeen !== undefined && f.daysSinceLastSeen > 0) {
           if (f.daysSinceLastSeen === 1) line += ` (last seen yesterday)`;
@@ -227,12 +249,16 @@ serve(async (req) => {
       userPrompt += `\n\nLast time you said: "${previousDescription}"\nIf the scene is basically the same, keep it super brief or mention something different. Don't repeat yourself.`;
     }
 
+    const deadline = Date.now() + REQUEST_BUDGET_MS;
+    const timeLeft = () => deadline - Date.now();
+
     // Try each Groq model in order until one succeeds
     let content: string | null = null;
     let lastError = "";
     let usedModel = "";
 
     for (const model of GROQ_API_KEY ? VISION_MODELS : []) {
+      if (timeLeft() < MIN_ATTEMPT_MS) break;
       console.log("Trying Groq model:", model, "mode:", mode);
       
       try {
@@ -242,6 +268,7 @@ serve(async (req) => {
             "Authorization": `Bearer ${GROQ_API_KEY}`,
             "Content-Type": "application/json",
           },
+          signal: AbortSignal.timeout(timeLeft()),
           body: JSON.stringify({
             model,
             messages: [
@@ -274,7 +301,7 @@ serve(async (req) => {
         }
 
         const errorText = await res.text();
-        console.warn(`Model ${model} failed (${res.status}), trying next...`);
+        console.warn(`Model ${model} failed (${res.status}), trying next...`, errorText.slice(0, 200));
         lastError = `${model}: ${res.status}`;
       } catch (fetchErr) {
         console.warn(`Model ${model} fetch error:`, fetchErr);
@@ -283,12 +310,12 @@ serve(async (req) => {
     }
 
     // ── Fallback: Claude (Anthropic API) ──
-    if (content === null && ANTHROPIC_API_KEY) {
+    if (content === null && ANTHROPIC_API_KEY && timeLeft() >= MIN_ATTEMPT_MS) {
       console.log(GROQ_API_KEY ? "Groq failed, falling back to Claude:" : "Groq not configured, using Claude:", CLAUDE_MODEL);
       try {
-        // The capture loop's watchdog gives up after 15s, so fail fast instead of using the
-        // SDK defaults (10-minute timeout, 2 retries).
-        const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY, timeout: 10_000, maxRetries: 0 });
+        // Fail fast within the shared budget instead of using the SDK defaults
+        // (10-minute timeout, 2 retries).
+        const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY, timeout: timeLeft(), maxRetries: 0 });
         const msg = await anthropic.beta.messages.create({
           model: CLAUDE_MODEL,
           max_tokens: 16000,
@@ -332,7 +359,7 @@ serve(async (req) => {
 
     // ── Last fallback: Lovable AI Gateway (Gemini) ──
     if (content === null) {
-      if (LOVABLE_API_KEY) {
+      if (LOVABLE_API_KEY && timeLeft() >= MIN_ATTEMPT_MS) {
         console.log("Earlier providers unavailable, falling back to Lovable AI Gateway (Gemini)");
         try {
           const geminiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -341,6 +368,7 @@ serve(async (req) => {
               "Authorization": `Bearer ${LOVABLE_API_KEY}`,
               "Content-Type": "application/json",
             },
+            signal: AbortSignal.timeout(timeLeft()),
             body: JSON.stringify({
               model: "google/gemini-2.5-flash",
               messages: [
@@ -391,17 +419,25 @@ serve(async (req) => {
 
     console.log("Vision response received from model:", usedModel, "mode:", mode);
 
-    // Strip Llama model artifacts that corrupt JSON
-    content = content.replace(/<\|[^|]*\|>/g, "").replace(/\bassistant\b/g, "");
+    // Strip leaked Llama chat-template headers (e.g. "<|start_header_id|>assistant<|end_header_id|>")
+    // without deleting the real word "assistant" from descriptions.
+    content = content
+      .replace(/<\|start_header_id\|>\s*assistant\s*<\|end_header_id\|>/g, "")
+      .replace(/<\|[^|]*\|>/g, "")
+      // Qwen can emit its reasoning as <think>...</think> before the answer. Drop it so the
+      // JSON match below doesn't start inside the reasoning.
+      .replace(/<think>[\s\S]*?<\/think>/g, "");
     
     // Parse JSON from response with multiple fallback strategies
-    let result: any = { text_content: "", description: "", hazards: [] as string[], priority: 5 };
+    let result: VisionResult = { text_content: "", description: "", hazards: [], priority: 5 };
     let parsed = false;
     
     try {
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        let jsonStr = jsonMatch[0]
+        const jsonStr = jsonMatch[0]
+          // Intentionally strip raw control characters that break JSON.parse
+          // eslint-disable-next-line no-control-regex
           .replace(/[\x00-\x1F\x7F]/g, " ")
           .replace(/,\s*}/g, "}")
           .replace(/,\s*]/g, "]");
@@ -432,7 +468,7 @@ serve(async (req) => {
         result.description = descMatch[1];
       } else {
         result.description = content
-          .replace(/[{}":\[\]]/g, "")
+          .replace(/[{}":[\]]/g, "")
           .replace(/text_content|description|hazards|priority|found/g, "")
           .replace(/\s+/g, " ")
           .trim()

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 /**
  * Audio feedback for the Item Finder "Geiger Counter" mode.
@@ -10,13 +10,21 @@ export const useFinderSound = () => {
 
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
     }
     // Resume if suspended (iOS)
     if (audioContextRef.current.state === "suspended") {
-      audioContextRef.current.resume();
+      audioContextRef.current.resume().catch(() => undefined);
     }
     return audioContextRef.current;
+  }, []);
+
+  // Release the AudioContext on unmount (browsers cap the number of live contexts)
+  useEffect(() => {
+    return () => {
+      audioContextRef.current?.close().catch(() => undefined);
+      audioContextRef.current = null;
+    };
   }, []);
 
   /** High-pitch ping — item found */
@@ -42,6 +50,7 @@ export const useFinderSound = () => {
 
     // Double ping for emphasis
     setTimeout(() => {
+      if (ctx.state === "closed") return;
       const osc2 = ctx.createOscillator();
       const gain2 = ctx.createGain();
       osc2.connect(gain2);

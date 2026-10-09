@@ -1,4 +1,4 @@
- import { useCallback, useRef } from "react";
+ import { useCallback, useEffect, useRef } from "react";
  
  export const useHazardSound = () => {
    const audioContextRef = useRef<AudioContext | null>(null);
@@ -6,9 +6,21 @@
  
    const getAudioContext = useCallback(() => {
      if (!audioContextRef.current) {
-       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+       audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+     }
+     // Resume if suspended (autoplay policy / iOS) — otherwise hazard sounds are silent
+     if (audioContextRef.current.state === "suspended") {
+       audioContextRef.current.resume().catch(() => undefined);
      }
      return audioContextRef.current;
+   }, []);
+
+   // Release the AudioContext on unmount
+   useEffect(() => {
+     return () => {
+       audioContextRef.current?.close().catch(() => undefined);
+       audioContextRef.current = null;
+     };
    }, []);
  
    // Low-frequency thrum for caution (priority 6-8)
@@ -74,5 +86,11 @@
      // Priority 1-5: No sound
    }, [playCautionSound, playDangerSound]);
  
-   return { playHazardSound };
+   // Call from a tap handler: iOS only lets an AudioContext start inside a user gesture, and
+   // hazard sounds otherwise first play from the async analysis loop, where it stays suspended.
+   const unlock = useCallback(() => {
+     getAudioContext();
+   }, [getAudioContext]);
+ 
+   return { playHazardSound, unlock };
  };

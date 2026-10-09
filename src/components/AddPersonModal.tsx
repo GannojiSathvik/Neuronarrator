@@ -27,6 +27,9 @@ interface AddPersonModalProps {
   onClose: () => void;
   onSave: (name: string, relation: RelationType) => Promise<boolean>;
   isProcessing?: boolean;
+  initialName?: string;
+  initialRelation?: RelationType;
+  existingPerson?: boolean;
 }
 
 export const AddPersonModal = ({
@@ -34,11 +37,18 @@ export const AddPersonModal = ({
   onClose,
   onSave,
   isProcessing = false,
+  initialName = '',
+  initialRelation = 'Acquaintance',
+  existingPerson = false,
 }: AddPersonModalProps) => {
   const [name, setName] = useState("");
   const [relation, setRelation] = useState<RelationType>("Acquaintance");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
+  const [consent, setConsent] = useState(false);
+  useEffect(() => {
+    if (isOpen) { setName(initialName); setRelation(initialRelation); setConsent(false); setError(''); }
+  }, [isOpen, initialName, initialRelation]);
 
   const {
     isRecording,
@@ -52,7 +62,7 @@ export const AddPersonModal = ({
 
   // When transcript arrives, auto-fill the name field
   useEffect(() => {
-    if (transcript) {
+    if (transcript && !existingPerson) {
       // Clean up transcript - capitalize first letter of each word
       const cleanName = transcript
         .replace(/[.!?,;:]/g, "")
@@ -62,7 +72,7 @@ export const AddPersonModal = ({
         .join(" ");
       setName(cleanName);
     }
-  }, [transcript]);
+  }, [transcript, existingPerson]);
 
   const handleVoiceToggle = async () => {
     if (isRecording) {
@@ -73,6 +83,7 @@ export const AddPersonModal = ({
   };
 
   const handleSave = async () => {
+    if (!consent || isSaving) return;
     const trimmedName = name.trim();
 
     if (!trimmedName) {
@@ -125,16 +136,16 @@ export const AddPersonModal = ({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-foreground">
             <UserPlus className="w-5 h-5 text-ios-blue" />
-            Who is this?
+            {existingPerson ? `Connect a face to ${initialName}` : 'Who is this?'}
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Say their name or type it below. Choose their relationship to you.
+            Confirm who is in front of the camera. The face descriptor is saved in this browser.
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-4">
           {/* Voice Input Section */}
-          <div className="flex flex-col items-center gap-3 py-2">
+          {!existingPerson && <div className="flex flex-col items-center gap-3 py-2">
             <button
               onClick={handleVoiceToggle}
               disabled={isTranscribing || isSaving}
@@ -164,9 +175,9 @@ export const AddPersonModal = ({
                 : "Tap mic & say the name"}
             </p>
             {voiceError && (
-              <p className="text-xs text-ios-red text-center">{voiceError}</p>
+              <p role="alert" className="text-xs text-ios-red text-center">{voiceError}</p>
             )}
-          </div>
+          </div>}
 
           {/* Divider */}
           <div className="flex items-center gap-3">
@@ -186,7 +197,8 @@ export const AddPersonModal = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={isSaving || isRecording}
+              disabled={isSaving || isRecording || existingPerson}
+              maxLength={80}
               className="bg-background/50 border-glass-border text-foreground placeholder:text-muted-foreground"
             />
           </div>
@@ -203,7 +215,7 @@ export const AddPersonModal = ({
             <Select
               value={relation}
               onValueChange={(value) => setRelation(value as RelationType)}
-              disabled={isSaving}
+              disabled={isSaving || existingPerson}
             >
               <SelectTrigger
                 id="relation"
@@ -225,7 +237,8 @@ export const AddPersonModal = ({
             </Select>
           </div>
 
-          {error && <p className="text-sm text-ios-red">{error}</p>}
+          <label className="flex gap-3 items-start text-sm text-muted-foreground"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} className="mt-1" />This person agrees to saving their face for local recognition.</label>
+          {error && <p role="alert" className="text-sm text-ios-red">{error}</p>}
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
@@ -239,7 +252,7 @@ export const AddPersonModal = ({
           </Button>
           <Button
             onClick={handleSave}
-            disabled={isSaving || !name.trim() || isRecording || isTranscribing}
+            disabled={isSaving || !name.trim() || isRecording || isTranscribing || !consent}
             className="bg-ios-blue hover:bg-ios-blue/90 text-white"
           >
             {isSaving ? (

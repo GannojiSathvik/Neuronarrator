@@ -12,7 +12,9 @@ function badRequest(message: string): Response {
   );
 }
 
-const VALID_SPEAKERS = ["anushka", "abhilash"];
+// bulbul:v2 (and its speakers "anushka"/"abhilash") was deprecated by Sarvam. Clients still
+// send the old names, so map them to comparable bulbul:v3 voices.
+const SPEAKERS: Record<string, string> = { anushka: "priya", abhilash: "rahul" };
 
 // Simple in-memory rate limiter: max 1 request per 2 seconds per client
 const lastRequestTime = new Map<string, number>();
@@ -70,8 +72,8 @@ serve(async (req) => {
       );
     }
 
-    if (!VALID_SPEAKERS.includes(speaker)) {
-      return badRequest(`speaker must be one of: ${VALID_SPEAKERS.join(", ")}`);
+    if (typeof speaker !== "string" || !Object.hasOwn(SPEAKERS, speaker)) {
+      return badRequest(`speaker must be one of: ${Object.keys(SPEAKERS).join(", ")}`);
     }
 
     // Truncate text to 500 chars max to keep response fast
@@ -93,15 +95,12 @@ serve(async (req) => {
         },
         signal: controller.signal,
         body: JSON.stringify({
-          inputs: [truncatedText],
-          target_language_code: "en-IN",
-          speaker: speaker,
-          model: "bulbul:v2",
-          pitch: 0,
+          text: truncatedText,
+          language_code: "en-IN",
+          speaker: SPEAKERS[speaker],
+          model: "bulbul:v3",
           pace: 1.1,
-          loudness: 1.5,
           speech_sample_rate: 22050,
-          enable_preprocessing: true,
         }),
       });
     } catch (fetchErr) {

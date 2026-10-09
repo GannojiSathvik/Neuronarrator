@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 interface UseVoiceInputReturn {
@@ -20,8 +20,12 @@ export function useVoiceInput(): UseVoiceInputReturn {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  // Bumped by reset() and each new recording. A transcription that finishes after its session
+  // was cancelled must not fill in a name (it would pre-fill the next person's form).
+  const sessionRef = useRef(0);
 
   const startRecording = useCallback(async () => {
+    sessionRef.current += 1;
     setError(null);
     setTranscript(null);
     chunksRef.current = [];
@@ -36,12 +40,15 @@ export function useVoiceInput(): UseVoiceInputReturn {
       });
       streamRef.current = stream;
 
-      // Use webm/opus which is widely supported
+      // Use webm/opus which is widely supported; fall back to the browser default
+      // (e.g. Safari only supports audio/mp4 — passing an unsupported mimeType throws)
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
-        : "audio/webm";
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : undefined;
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -55,6 +62,10 @@ export function useVoiceInput(): UseVoiceInputReturn {
       console.log("Voice recording started");
     } catch (err) {
       console.error("Microphone access error:", err);
+      // Release the mic if getUserMedia succeeded but MediaRecorder setup failed
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      mediaRecorderRef.current = null;
       setError("Could not access microphone. Please check permissions.");
     }
   }, []);
@@ -66,8 +77,14 @@ export function useVoiceInput(): UseVoiceInputReturn {
 
     return new Promise((resolve) => {
       const mediaRecorder = mediaRecorderRef.current!;
+      const session = sessionRef.current;
+      const cancelled = () => session !== sessionRef.current;
 
       mediaRecorder.onstop = async () => {
+        if (cancelled()) {
+          resolve(null);
+          return;
+        }
         // Stop all tracks
         streamRef.current?.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
@@ -76,7 +93,8 @@ export function useVoiceInput(): UseVoiceInputReturn {
         setIsTranscribing(true);
 
         try {
-          const audioBlob = new Blob(chunksRef.current, { type: "audio/webm" });
+          const recordedType = (mediaRecorder.mimeType || "audio/webm").split(";")[0];
+          const audioBlob = new Blob(chunksRef.current, { type: recordedType });
           console.log("Audio recorded, size:", audioBlob.size, "bytes");
 
           if (audioBlob.size < 1000) {
@@ -101,9 +119,13 @@ export function useVoiceInput(): UseVoiceInputReturn {
           const { data, error: fnError } = await supabase.functions.invoke(
             "speech-to-text",
             {
-              body: { audioBase64, language_code: "en-IN" },
+              body: { audioBase64, language_code: "en-IN", mime_type: recordedType },
             }
           );
+          if (cancelled()) {
+            resolve(null);
+            return;
+          }
 
           if (fnError) {
             console.error("STT edge function error:", fnError);
@@ -127,6 +149,10 @@ export function useVoiceInput(): UseVoiceInputReturn {
           setIsTranscribing(false);
           resolve(text);
         } catch (err) {
+          if (cancelled()) {
+            resolve(null);
+            return;
+          }
           console.error("Transcription error:", err);
           setError("Voice recognition failed. Please try again.");
           setIsTranscribing(false);
@@ -139,6 +165,7 @@ export function useVoiceInput(): UseVoiceInputReturn {
   }, []);
 
   const reset = useCallback(() => {
+    sessionRef.current += 1;
     // Stop any ongoing recording
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
@@ -151,6 +178,19 @@ export function useVoiceInput(): UseVoiceInputReturn {
     setIsTranscribing(false);
     setTranscript(null);
     setError(null);
+  }, []);
+
+  // Release the microphone if the component unmounts mid-recording
+  useEffect(() => {
+    return () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.onstop = null;
+        try { recorder.stop(); } catch { /* already stopped */ }
+      }
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    };
   }, []);
 
   return {

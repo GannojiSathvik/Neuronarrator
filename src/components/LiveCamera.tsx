@@ -201,6 +201,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
+          role="alert"
           className="fixed inset-0 bg-black/90 flex flex-col items-center justify-center z-30 px-8"
         >
           <Camera className="w-12 h-12 text-muted-foreground mb-4" />

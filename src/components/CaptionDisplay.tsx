@@ -8,19 +8,21 @@ interface CaptionDisplayProps {
   isVisible: boolean;
   priority?: number;
   mode?: VisionMode;
+  // Whether screen readers should read captions as they change (off while the app speaks them itself)
+  announce?: boolean;
+  // Error captions are always announced, even when announce is off
+  isError?: boolean;
 }
 
 // Safety: if the AI returns raw JSON instead of a clean description, extract it
 function sanitizeCaption(raw: string): string {
   if (!raw) return "";
   if (raw.trim().startsWith("{") || raw.includes('"description"')) {
-    try {
-      const cleaned = raw.replace(/<\|[^|]*\|>/g, "").replace(/\bassistant\b/g, "");
-      const match = cleaned.match(/"description"\s*:\s*"([^"]+)"/);
-      if (match) return match[1];
-    } catch {}
+    const cleaned = raw.replace(/<\|[^|]*\|>/g, "").replace(/\bassistant\b/g, "");
+    const match = cleaned.match(/"description"\s*:\s*"([^"]+)"/);
+    if (match) return match[1];
     return raw
-      .replace(/[{}":\[\]]/g, "")
+      .replace(/[{}":[\]]/g, "")
       .replace(/text_content|description|hazards|priority|found/g, "")
       .replace(/<\|[^|]*\|>/g, "")
       .replace(/\bassistant\b/g, "")
@@ -30,7 +32,7 @@ function sanitizeCaption(raw: string): string {
   return raw;
 }
 
-export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general" }: CaptionDisplayProps) => {
+export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general", announce = true, isError = false }: CaptionDisplayProps) => {
   const contentKeyRef = useRef(0);
   const prevTextRef = useRef(text);
 
@@ -59,6 +61,12 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
   };
 
   return (
+    <>
+    {/* Errors go to a dedicated, always-mounted alert region so they're read even when the caption region is off */}
+    <p role="alert" className="sr-only">
+      {isVisible && isError ? cleanText : ""}
+    </p>
+    <div aria-live={announce && !isError ? "polite" : "off"} aria-atomic="true">
     <AnimatePresence>
       {isVisible && (hasDescription || hasTranscribedText) && (
         <motion.div
@@ -132,5 +140,7 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
         </motion.div>
       )}
     </AnimatePresence>
+    </div>
+    </>
   );
 };

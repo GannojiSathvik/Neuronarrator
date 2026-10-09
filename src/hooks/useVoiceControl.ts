@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 
 /**
  * Push-to-talk voice control hook for mode switching.
@@ -57,20 +57,14 @@ function speakFeedback(text: string) {
   }
   // Also vibrate on mode switch for tactile confirmation
   if ("vibrate" in navigator) {
-    try { navigator.vibrate([100, 50, 100]); } catch {}
+    try { navigator.vibrate([100, 50, 100]); } catch { /* vibration unsupported */ }
   }
 }
 
 export function parseCommand(transcript: string): { mode: CommandMode; targetItem: string } | null {
   const lower = transcript.toLowerCase().trim();
 
-  // Check currency patterns
-  for (const pattern of CURRENCY_PATTERNS) {
-    if (lower.includes(pattern)) {
-      return { mode: "currency", targetItem: "" };
-    }
-  }
-
+  // Explicit finding commands take precedence over currency words in the item name.
   // Check finder patterns (regex-based to extract the object)
   for (const pattern of FINDER_PATTERNS) {
     const match = lower.match(pattern);
@@ -82,6 +76,13 @@ export function parseCommand(transcript: string): { mode: CommandMode; targetIte
       if (item.length >= 2) {
         return { mode: "finder", targetItem: item };
       }
+    }
+  }
+
+  // Check currency patterns
+  for (const pattern of CURRENCY_PATTERNS) {
+    if (lower.includes(pattern)) {
+      return { mode: "currency", targetItem: "" };
     }
   }
 
@@ -100,11 +101,11 @@ export function useVoiceControl(): UseVoiceControlReturn {
   const [transcript, setTranscript] = useState("");
   const [commandMode, setCommandMode] = useState<CommandMode>("standard");
   const [targetItem, setTargetItem] = useState("");
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const finalTranscriptRef = useRef("");
 
   const startListening = useCallback(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       console.warn("[VoiceControl] SpeechRecognition not supported");
       return;
@@ -112,7 +113,9 @@ export function useVoiceControl(): UseVoiceControlReturn {
 
     // Stop any existing instance
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (_) {}
+      // Detach handlers so the old instance's onend doesn't process/speak a stale transcript
+      recognitionRef.current.onend = null;
+      try { recognitionRef.current.abort(); } catch { /* already stopped */ }
       recognitionRef.current = null;
     }
 
@@ -130,7 +133,7 @@ export function useVoiceControl(): UseVoiceControlReturn {
       console.log("[VoiceControl] Listening started");
     };
 
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event: SpeechRecognitionEventLike) => {
       let interim = "";
       let final = "";
 
@@ -150,7 +153,7 @@ export function useVoiceControl(): UseVoiceControlReturn {
       setTranscript(final || interim);
     };
 
-    recognition.onerror = (event: any) => {
+    recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
       if (event.error !== "no-speech" && event.error !== "aborted") {
         console.warn("[VoiceControl] Error:", event.error);
       }
@@ -200,9 +203,21 @@ export function useVoiceControl(): UseVoiceControlReturn {
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
-      } catch (_) {}
+      } catch { /* already stopped */ }
     }
     setIsListening(false);
+  }, []);
+
+  // Abort any active recognition session on unmount
+  useEffect(() => {
+    return () => {
+      const recognition = recognitionRef.current;
+      if (recognition) {
+        recognition.onend = null;
+        try { recognition.abort(); } catch { /* already stopped */ }
+        recognitionRef.current = null;
+      }
+    };
   }, []);
 
   return {

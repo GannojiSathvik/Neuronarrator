@@ -1,4 +1,4 @@
- import { useState, useCallback, useRef } from "react";
+ import { useState, useCallback, useRef, useEffect } from "react";
  
  // Standard Braille dot patterns for haptic feedback (6-dot cell: dots 1-6)
  // Dot positions: 1 4
@@ -35,61 +35,29 @@
  };
  
  // Timing constants (in ms)
- const DOT_VIBRATION = 100;      // Dot (•): 100ms vibration
- const EMPTY_PAUSE = 50;         // Empty space: 50ms pause
- const CHAR_SEPARATOR = 300;     // Character separator: 300ms pause
+ const DOT_PRESENT = 150;        // Raised dot: long buzz
+ const DOT_ABSENT = 30;          // Flat dot: short tick, so every slot is felt and leading blanks aren't lost
+ const SLOT_GAP = 100;           // Pause between the six dot slots
+ const CHAR_SEPARATOR = 400;     // Pause between characters (clearly longer than SLOT_GAP)
+ const WORD_SEPARATOR = 800;     // Pause for a space between words
  
  /**
-  * Convert Braille dot pattern to vibration array
-  * A Braille cell has 6 positions - we vibrate for present dots, pause for absent
+  * Convert a character to its vibration pattern (navigator.vibrate format: buzz, pause, buzz, ...).
+  * Every one of the six dot positions produces a buzz - long for a raised dot, short for a flat one -
+  * so letters that differ only by a leading blank dot (I/K, J/M, S/L...) stay distinguishable.
+  * Returns [] for a space and null for characters with no Braille mapping.
   */
- const dotsToVibrationPattern = (dots: number[]): number[] => {
+ export const charToVibrationPattern = (char: string): number[] | null => {
+   const dots = BRAILLE_MAP[char.toUpperCase()];
+   if (dots === undefined) return null;
+   if (dots.length === 0) return [];
+ 
    const pattern: number[] = [];
-   
-   // If no dots (space character), just add a longer pause
-   if (dots.length === 0) {
-     return [0, CHAR_SEPARATOR];
-   }
-   
-   // Iterate through all 6 dot positions
    for (let pos = 1; pos <= 6; pos++) {
-     if (dots.includes(pos)) {
-       // Dot present: vibrate
-       pattern.push(DOT_VIBRATION);
-     } else {
-       // Dot absent: pause (represented as 0 vibration)
-       pattern.push(0);
-     }
-     // Add pause between dot positions
-     pattern.push(EMPTY_PAUSE);
+     if (pos > 1) pattern.push(SLOT_GAP);
+     pattern.push(dots.includes(pos) ? DOT_PRESENT : DOT_ABSENT);
    }
-   
    return pattern;
- };
- 
- /**
-  * Build full vibration pattern for a text string
-  */
- const textToVibrationPattern = (text: string): number[] => {
-   const upperText = text.toUpperCase();
-   const fullPattern: number[] = [];
-   
-   for (let i = 0; i < upperText.length; i++) {
-     const char = upperText[i];
-     const dots = BRAILLE_MAP[char];
-     
-     if (dots !== undefined) {
-       const charPattern = dotsToVibrationPattern(dots);
-       fullPattern.push(...charPattern);
-       
-       // Add character separator pause (except after last char)
-       if (i < upperText.length - 1) {
-         fullPattern.push(0, CHAR_SEPARATOR);
-       }
-     }
-   }
-   
-   return fullPattern;
  };
  
  /**
@@ -103,22 +71,32 @@
    const [isPlaying, setIsPlaying] = useState(false);
    const [currentChar, setCurrentChar] = useState<string | null>(null);
    const [currentDots, setCurrentDots] = useState<number[]>([]);
-   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-   const abortRef = useRef(false);
+   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   // Resolver for the in-flight wait, so stopping doesn't leave the playback promise pending forever
+   const pendingResolveRef = useRef<(() => void) | null>(null);
+   // Incremented on every stop/start; a playback loop exits when its run id is no longer current
+   const runIdRef = useRef(0);
  
-   const stopHaptic = useCallback(() => {
-     abortRef.current = true;
+   const cancelPending = useCallback(() => {
+     runIdRef.current += 1;
      if (timeoutRef.current) {
        clearTimeout(timeoutRef.current);
        timeoutRef.current = null;
      }
+     const resolve = pendingResolveRef.current;
+     pendingResolveRef.current = null;
+     if (resolve) resolve();
      if ("vibrate" in navigator) {
-       navigator.vibrate(0); // Stop any ongoing vibration
+       try { navigator.vibrate(0); } catch { /* vibration unsupported */ } // Stop any ongoing vibration
      }
+   }, []);
+ 
+   const stopHaptic = useCallback(() => {
+     cancelPending();
      setIsPlaying(false);
      setCurrentChar(null);
      setCurrentDots([]);
-   }, []);
+   }, [cancelPending]);
  
    const playHapticMessage = useCallback(async (text: string): Promise<void> => {
      if (!("vibrate" in navigator)) {
@@ -128,14 +106,14 @@
  
      // Stop any existing playback
      stopHaptic();
-     abortRef.current = false;
+     const runId = runIdRef.current;
      setIsPlaying(true);
  
      const upperText = text.toUpperCase();
  
      // Play each character sequentially
      for (let i = 0; i < upperText.length; i++) {
-       if (abortRef.current) break;
+       if (runIdRef.current !== runId) break;
  
        const char = upperText[i];
        const dots = BRAILLE_MAP[char];
@@ -144,28 +122,39 @@
          setCurrentChar(char);
          setCurrentDots(dots);
  
-         const pattern = dotsToVibrationPattern(dots);
+         const pattern = charToVibrationPattern(char) ?? [];
          const duration = calculatePatternDuration(pattern);
+         // A space has no buzzes, just a longer pause
+         const separator = pattern.length === 0 ? WORD_SEPARATOR : CHAR_SEPARATOR;
  
-         try {
-           navigator.vibrate(pattern);
-         } catch (e) {
-           console.warn("Vibration failed:", e);
+         if (pattern.length > 0) {
+           try {
+             navigator.vibrate(pattern);
+           } catch (e) {
+             console.warn("Vibration failed:", e);
+           }
          }
  
-         // Wait for pattern to complete + character separator
+         // Wait for pattern to complete + character/word separator
          await new Promise<void>((resolve) => {
-           timeoutRef.current = setTimeout(resolve, duration + CHAR_SEPARATOR);
+           pendingResolveRef.current = resolve;
+           timeoutRef.current = setTimeout(() => {
+             pendingResolveRef.current = null;
+             resolve();
+           }, duration + separator);
          });
        }
      }
  
-     if (!abortRef.current) {
+     if (runIdRef.current === runId) {
        setIsPlaying(false);
        setCurrentChar(null);
        setCurrentDots([]);
      }
    }, [stopHaptic]);
+ 
+   // Cancel any in-progress playback on unmount
+   useEffect(() => cancelPending, [cancelPending]);
  
    return {
      playHapticMessage,

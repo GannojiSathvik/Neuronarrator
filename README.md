@@ -118,13 +118,29 @@ To use your own backend, run `./scripts/setup-own-backend.sh` (guide: [docs/SETU
 | `SARVAM_API_KEY` | text-to-speech; speech-to-text fallback | optional; without it the app uses browser TTS |
 | `LOVABLE_API_KEY` | analyze-image (legacy, Lovable Cloud only) | optional |
 
+## Memory model
+
+The app remembers at three levels. Only the long-term tier is saved; everything stays on the device until a question is asked.
+
+| Tier | Where | Size and lifetime | What it holds |
+|---|---|---|---|
+| Very short-term | `lastDescriptionRef`, `src/lib/novelty.ts` | The last description (≤ 1000 chars); repeats muted for 30 s; a person's reminder spoken once per 60 s appearance | Stops the narrator repeating itself |
+| Working memory | `src/lib/workingMemory.ts` (in the tab only, gone on reload) | A ring buffer of the last 3 minutes, at most 40 entries | Scenes, text read, hazards, people appearing (known or not), and question/answer pairs |
+| Long-term | IndexedDB (Dexie): `faces` and `memories` | Unlimited, until the user deletes it | People, the user's dated notes about them, and automatic sightings |
+
+**Working memory.** A near-duplicate (the same scene reworded, judged with the same word-overlap test as the repeat check, or the same person still in view) refreshes the existing entry instead of adding one, so a static scene can't fill the buffer. When you ask a question, the buffer is summarised newest first (`8s ago: Ronit (Friend) appeared`, `25s ago: scene — a desk with a laptop`) in at most 800 characters. The newest line always goes first, so the last few seconds are never cut. The summary is sent as `recentContext`.
+
+**Long-term recall.** For a question, the app picks up to 3 people: anyone named in the question, the face in view, and people seen in the last few minutes. For each, it reads that person's newest 50 notes with one indexed Dexie query (`[personId+occurredAt]`). It then ranks them with BM25 against the question, keeping the top 3, or the newest 2 when nothing matches. The notes are quoted, not summarised, and capped at 1200 characters in total. They are sent as `personNotes`, and the model is told to quote them faithfully and never invent personal facts.
+
+**Sightings.** The first time a known face is recognised, and then at most once every 10 minutes, a note with source `sighting` ("Seen at 4:12 PM on 10 Oct 2026.") is saved. That answers "when did I last see Meera?". Sightings are hidden from the Memory space timeline and never used as the spoken "Last time" reminder.
+
 ## Edge function API
 
 The frontend calls all three with `supabase.functions.invoke`. Each returns JSON and answers CORS preflight.
 
 | Function | Request | Success response | Errors |
 |---|---|---|---|
-| `analyze-image` | `{ imageBase64, mode: "general"\|"reader"\|"currency"\|"finder", knownFaces?, previousDescription?, targetItem? }` | `{ text_content, description, hazards[], priority 1–10, found? }` | 400 invalid input · 500 no provider configured · 503 all models failed |
+| `analyze-image` | `{ imageBase64, mode: "general"\|"reader"\|"currency"\|"finder", knownFaces?, previousDescription?, targetItem?, question?, recentContext? (≤ 1000 chars), personNotes? ([{ name, notes[] }], ≤ 3 people, ≤ 1200 chars) }` | `{ text_content, description, hazards[], priority 1–10, found? }` | 400 invalid input · 500 no provider configured · 503 all models failed |
 | `text-to-speech` | `{ text, speaker?: "anushka"\|"abhilash" }` (text truncated to 500 chars) | `{ audioBase64 }` | 400 · 429 rate limited · 502 Sarvam error · 504 timeout (8 s) |
 | `speech-to-text` | `{ audioBase64, language_code?: "en-IN", mime_type?: "audio/webm"\|"audio/mp4"\|"audio/ogg"\|"audio/wav"… }` | `{ transcript }` | 400 · 500 no provider configured · 502 provider error or timeout (9 s) |
 

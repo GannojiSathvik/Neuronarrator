@@ -18,6 +18,29 @@ const VALID_MODES = ["general", "reader", "currency", "finder"];
 // A 1280x720 JPEG frame from LiveCamera is well under 1 MB of base64.
 const MAX_IMAGE_BASE64_LENGTH = 5_000_000;
 const MAX_KNOWN_FACES = 20;
+// Memory sent with a spoken question (see src/lib/workingMemory.ts and src/lib/memory.ts).
+const MAX_RECENT_CONTEXT_LENGTH = 1000;
+const MAX_PERSON_NOTES_PEOPLE = 3;
+const MAX_PERSON_NOTES_PER_PERSON = 4;
+const MAX_PERSON_NOTES_CHARS = 1200;
+
+interface PersonNotes {
+  name: string;
+  notes: string[];
+}
+
+// Same size measure as the client's personNotesLength: every name and note, summed.
+function isValidPersonNotes(value: unknown): value is PersonNotes[] {
+  if (!Array.isArray(value) || value.length > MAX_PERSON_NOTES_PEOPLE) return false;
+  let total = 0;
+  for (const person of value) {
+    if (!person || typeof person !== "object" || typeof person.name !== "string" || !person.name.trim()) return false;
+    if (!Array.isArray(person.notes) || person.notes.length > MAX_PERSON_NOTES_PER_PERSON) return false;
+    if (!person.notes.every((note: unknown) => typeof note === "string")) return false;
+    total += person.name.length + person.notes.reduce((sum: number, note: string) => sum + note.length, 0);
+  }
+  return total <= MAX_PERSON_NOTES_CHARS;
+}
 
 // Vision models — try primary first, fallback if over capacity
 // Groq shut down both Llama 4 vision models in 2026 (Maverick in March, Scout in July), so
@@ -144,6 +167,11 @@ Rules:
 - If you can't tell from the image, say so plainly and suggest how to point the camera ("Hold it a bit closer").
 - If you notice a real danger, mention it and set priority 8 or higher.
 
+Memory:
+- You may get "What happened recently (newest first)": short notes from the last few minutes. Use them for questions about the recent past, like "what did I just see?", "what did that sign say?" or "who was here a moment ago?". For questions about right now ("what's in front of me?", "what am I holding?"), prefer the current image over recent notes.
+- You may get "Saved notes about <name>": the user's own notes about people they know. Use them for questions like "what did Ronit and I talk about last time?" or "when did I last see Meera?". Quote or closely paraphrase them faithfully and mention the date if it helps.
+- NEVER invent personal facts about anyone. If neither the image, recent notes nor saved notes answer the question, say you don't know.
+
 CRITICAL: Output ONLY the JSON object. No markdown, no backticks, no extra words.`;
 
 const buildFinderPrompt = (targetItem: string) => `You are helping a blind person find a specific item. The item they are looking for is: "${targetItem}".
@@ -197,6 +225,8 @@ serve(async (req) => {
       previousDescription: rawPreviousDescription = "",
       targetItem: rawTargetItem = "",
       question: rawQuestion = "",
+      recentContext: rawRecentContext = "",
+      personNotes = [],
     } = body;
 
     if (!imageBase64) {
@@ -225,6 +255,16 @@ serve(async (req) => {
     }
     // A spoken question from the user (push-to-talk or "neuro …"), answered about this frame.
     const question = rawQuestion.trim().slice(0, 300);
+    if (typeof rawRecentContext !== "string" || rawRecentContext.length > MAX_RECENT_CONTEXT_LENGTH) {
+      return badRequest(`recentContext must be a string of at most ${MAX_RECENT_CONTEXT_LENGTH} characters`);
+    }
+    const recentContext = rawRecentContext.trim();
+    if (!isValidPersonNotes(personNotes)) {
+      return badRequest(
+        `personNotes must be an array of at most ${MAX_PERSON_NOTES_PEOPLE} {name, notes} entries, ` +
+          `${MAX_PERSON_NOTES_CHARS} characters in total`,
+      );
+    }
 
     // Select system prompt based on mode
     let systemPrompt: string;
@@ -275,6 +315,17 @@ serve(async (req) => {
         return line;
       }).join("; ");
       userPrompt += `\n\nPeople I recognize here: ${faceLines}. Use their names naturally. Mention their relationship and when you last saw them if it's been a while (more than a day). If you just saw them today, don't mention timing.`;
+    }
+
+    // Memory only accompanies a question: what happened recently, then saved notes per person
+    if (question && recentContext) {
+      userPrompt += `\n\nWhat happened recently (newest first):\n${recentContext}`;
+    }
+    if (question) {
+      for (const person of personNotes) {
+        const notes = person.notes.map((note) => note.trim()).filter(Boolean);
+        if (notes.length) userPrompt += `\n\nSaved notes about ${person.name.trim()}:\n- ${notes.join("\n- ")}`;
+      }
     }
 
     if (previousDescription && mode === "general" && !question) {

@@ -7,10 +7,11 @@ import { useState, useCallback, useRef, useEffect } from "react";
  * Commands:
  *   "Count notes" / "Money" / "Currency" → currency mode
  *   "Find [item]" / "Where is my [item]" → finder mode  
- *   "Describe" / "Read" / "What is this" → standard mode
+ *   "Read" / "Read this" / "What does it say" → reader mode
+ *   "Describe" / "What is this" → standard mode
  */
 
-export type CommandMode = "standard" | "currency" | "finder";
+export type CommandMode = "standard" | "reader" | "currency" | "finder";
 
 interface UseVoiceControlReturn {
   isListening: boolean;
@@ -39,8 +40,15 @@ const FINDER_PATTERNS = [
   /look\s+for\s+(?:my\s+)?(.+)/i,
 ];
 
+// Word-bounded so "read" doesn't fire inside "ready" or "already"
+const READER_PATTERNS = [
+  /\bread\b/i,
+  /\bwhat\s+(?:does\s+)?(?:it|this|that)\s+says?\b/i,
+  /\bpadh(?:o|iye|\s+do)\b/i,
+];
+
 const STANDARD_PATTERNS = [
-  "describe", "read", "what is this", "what do you see",
+  "describe", "what is this", "what do you see",
   "tell me", "look around", "scene", "standard",
   "what's in front", "what is in front",
 ];
@@ -83,6 +91,13 @@ export function parseCommand(transcript: string): { mode: CommandMode; targetIte
   for (const pattern of CURRENCY_PATTERNS) {
     if (lower.includes(pattern)) {
       return { mode: "currency", targetItem: "" };
+    }
+  }
+
+  // Check reader patterns (before standard, so "tell me what it says" reads rather than describes)
+  for (const pattern of READER_PATTERNS) {
+    if (pattern.test(lower)) {
+      return { mode: "reader", targetItem: "" };
     }
   }
 
@@ -177,12 +192,14 @@ export function useVoiceControl(): UseVoiceControlReturn {
             speakFeedback("Currency Mode. Show me the notes.");
           } else if (parsed.mode === "finder") {
             speakFeedback(`Finder Mode. Looking for ${parsed.targetItem}.`);
+          } else if (parsed.mode === "reader") {
+            speakFeedback("Read Mode. Point me at the text.");
           } else {
             speakFeedback("Standard Mode. Describing scene.");
           }
         } else {
           console.log("[VoiceControl] No command recognized in:", text);
-          speakFeedback("Sorry, I didn't understand. Try saying: count notes, find keys, or describe.");
+          speakFeedback("Sorry, I didn't understand. Try saying: count notes, find keys, read this, or describe.");
         }
       }
 

@@ -89,6 +89,7 @@ const Index = () => {
   // Map commandMode to VisionMode
   const mode: VisionMode = commandMode === "currency" ? "currency" 
     : commandMode === "finder" ? "finder" 
+    : commandMode === "reader" ? "reader"
     : "general";
 
   const {
@@ -193,7 +194,7 @@ const Index = () => {
   }, [clearAllFaces, speak]);
 
   // Handle mode switching from always-on voice command
-  const handleModeSwitch = useCallback((newMode: "standard" | "currency" | "finder", item?: string) => {
+  const handleModeSwitch = useCallback((newMode: "standard" | "reader" | "currency" | "finder", item?: string) => {
     console.log("[ModeSwitch] Hands-free mode switch:", newMode, item);
     setCommandMode(newMode as CommandMode);
     if (newMode === "finder" && item) {
@@ -201,6 +202,8 @@ const Index = () => {
       speak(`Finder Mode. Looking for ${item}.`, 5, { onEnd: onSpeechEnd });
     } else if (newMode === "currency") {
       speak("Currency Mode. Show me the notes.", 5, { onEnd: onSpeechEnd });
+    } else if (newMode === "reader") {
+      speak("Read Mode. Point me at the text.", 5, { onEnd: onSpeechEnd });
     } else {
       speak("Standard Mode. Describing scene.", 5, { onEnd: onSpeechEnd });
     }
@@ -387,6 +390,17 @@ const Index = () => {
         speechStartedAtRef.current = Date.now();
         speak(result.description, 5, { onEnd: onSpeechEnd });
       }
+      // Handle reader mode: short context ("Looks like a menu"), then the text itself.
+      // With no text, the description alone says so ("No text here, just ...").
+      else if (mode === "reader") {
+        const speechText = result.text_content
+          ? [result.description, result.text_content].filter(Boolean).join(" ")
+          : result.description;
+        setAnalysisState("success");
+        setShowWarning(false);
+        speechStartedAtRef.current = Date.now();
+        speak(speechText, 5, { onEnd: onSpeechEnd });
+      }
       // Handle standard/general modes
       else {
         // Describe the scene first, then any text read from it. Speaking only the text would
@@ -530,6 +544,7 @@ const Index = () => {
     switch (commandMode) {
       case "currency": return "ring-4 ring-ios-green/70 ring-inset";
       case "finder": return "ring-4 ring-yellow-400/70 ring-inset animate-pulse";
+      case "reader": return "ring-4 ring-ios-purple/70 ring-inset";
       case "standard": return "ring-4 ring-ios-blue/50 ring-inset";
       default: return "";
     }
@@ -543,6 +558,7 @@ const Index = () => {
     if (isAutoCapturing) {
       if (commandMode === "currency") return "💰 Currency Mode";
       if (commandMode === "finder") return `🔍 Searching for: ${targetItem}`;
+      if (commandMode === "reader") return "📖 Read Mode";
       return "👁 Scanning";
     }
     return "Touch anywhere to start";

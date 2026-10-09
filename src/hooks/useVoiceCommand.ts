@@ -3,7 +3,8 @@ import { useRef, useCallback, useEffect, useState } from "react";
 /**
  * Always-on voice command listener using the browser's free SpeechRecognition API.
  * Listens for "neuro remember [name]" wake phrase to register faces hands-free.
- * Also supports "neuro forget all" to clear faces (the caller asks for it twice before clearing).
+ * Also supports "neuro forget all" to clear faces (the caller asks for it twice before clearing),
+ * and "neuro describe / read / currency / find [item]" to switch modes.
  *
  * Robust matching handles common mis-transcriptions on mobile.
  */
@@ -61,6 +62,14 @@ const MODE_FINDER_PATTERNS = [
   /(?:neuro|neural|nero)\s+locate\s+(?:my\s+)?(.+)/i,
 ];
 
+// "neuro read", "neuro read this", "neuro reader". Word-bounded so "neuro ready" doesn't switch modes.
+const MODE_READER_PATTERN = /\b(?:neuro|neural|nero),?\s+read(?:er)?\b/i;
+
+/** Whether a hands-free transcript asks for Read mode. */
+export function isReaderCommand(transcript: string): boolean {
+  return MODE_READER_PATTERN.test(transcript);
+}
+
 const MODE_STANDARD_PATTERNS = [
   "neuro describe", "neural describe", "nero describe",
   "neuro standard", "neural standard", "nero standard",
@@ -71,7 +80,7 @@ interface UseVoiceCommandOptions {
   onRememberCommand: (name: string) => void;
   onClearCommand: () => void;
   onStopCommand?: () => void;
-  onModeSwitch?: (mode: "standard" | "currency" | "finder", targetItem?: string) => void;
+  onModeSwitch?: (mode: "standard" | "reader" | "currency" | "finder", targetItem?: string) => void;
   enabled: boolean;
 }
 
@@ -229,6 +238,14 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onStopComma
                   return;
                 }
               }
+            }
+
+            // Reader mode
+            if (isReaderCommand(transcript)) {
+              console.log("[VoiceCmd] ✅ READER MODE command detected");
+              setLastCommand("Read Mode");
+              onModeSwitchRef.current("reader");
+              return;
             }
 
             // Standard mode

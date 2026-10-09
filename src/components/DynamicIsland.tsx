@@ -22,6 +22,7 @@ export const DynamicIsland = ({ status, priority = 0, commandMode = "standard" }
         if (isHighPriority) return "bg-ios-red status-analyzing";
         if (commandMode === "currency") return "bg-ios-green";
         if (commandMode === "finder") return "bg-yellow-400";
+        if (commandMode === "reader") return "bg-ios-purple";
         return "bg-ios-blue";
       default:
         return "bg-ios-green";
@@ -39,6 +40,7 @@ export const DynamicIsland = ({ status, priority = 0, commandMode = "standard" }
         if (isHighPriority) return "text-ios-red";
         if (commandMode === "currency") return "text-ios-green";
         if (commandMode === "finder") return "text-yellow-400";
+        if (commandMode === "reader") return "text-ios-purple";
         return "text-ios-blue";
       default:
         return "text-muted-foreground";
@@ -54,11 +56,13 @@ export const DynamicIsland = ({ status, priority = 0, commandMode = "standard" }
       case "analyzing":
         if (commandMode === "currency") return "Reading Currency...";
         if (commandMode === "finder") return "Searching...";
+        if (commandMode === "reader") return "Reading Text...";
         return "Analyzing Scene...";
       case "success":
         if (isHighPriority) return "⚠ High Priority Alert";
         if (commandMode === "currency") return "💰 Currency Detected";
         if (commandMode === "finder") return "🔍 Item Finder";
+        if (commandMode === "reader") return "📖 Text Read";
         return "Analysis Complete";
       default:
         return "Ready";
@@ -69,6 +73,7 @@ export const DynamicIsland = ({ status, priority = 0, commandMode = "standard" }
   const getModeBadge = () => {
     if (commandMode === "currency") return "💰 CURRENCY";
     if (commandMode === "finder") return "🔍 FINDER";
+    if (commandMode === "reader") return "📖 READ";
     return null;
   };
 
@@ -82,6 +87,7 @@ export const DynamicIsland = ({ status, priority = 0, commandMode = "standard" }
           "px-3 py-1 rounded-full text-xs font-bold tracking-wider",
           commandMode === "currency" && "bg-ios-green/20 text-ios-green border border-ios-green/40",
           commandMode === "finder" && "bg-yellow-400/20 text-yellow-400 border border-yellow-400/40 animate-pulse",
+          commandMode === "reader" && "bg-ios-purple/20 text-ios-purple border border-ios-purple/40",
         )}>
           {modeBadge}
         </div>

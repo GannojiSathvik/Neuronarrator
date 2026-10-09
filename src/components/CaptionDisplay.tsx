@@ -45,18 +45,22 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
 
   const hasTranscribedText = textContent && textContent.length > 0;
   const hasDescription = cleanText && cleanText.length > 0;
+  // In Read mode the text is the answer, so it's shown large and the description is just context
+  const isReader = mode === "reader";
 
   // Mode-specific accent color
   const getAccentClass = () => {
     if (priority > 7) return "text-ios-red drop-shadow-[0_0_8px_hsl(var(--ios-red)/0.5)]";
     if (mode === "currency") return "text-ios-green";
     if (mode === "finder") return "text-yellow-400";
+    if (mode === "reader") return "text-ios-purple";
     return "text-white/95";
   };
 
   const getModeLabel = () => {
     if (mode === "currency") return "💰 Currency";
     if (mode === "finder") return "🔍 Found";
+    if (mode === "reader") return "📖 Reading";
     return null;
   };
 
@@ -100,7 +104,9 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.4, ease: "easeInOut" }}
-                    className={`text-lg font-medium leading-relaxed tracking-tight ${getAccentClass()}`}
+                    className={isReader
+                      ? `text-sm font-medium leading-relaxed ${getAccentClass()}`
+                      : `text-lg font-medium leading-relaxed tracking-tight ${getAccentClass()}`}
                   >
                     {cleanText}
                   </motion.p>
@@ -113,14 +119,16 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ duration: 0.4, delay: 0.15 }}
-                  className="mt-3 pt-3 border-t border-white/15"
+                  className={isReader ? "" : "mt-3 pt-3 border-t border-white/15"}
                 >
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-ios-blue animate-pulse" />
-                    <span className="text-xs text-ios-blue font-semibold uppercase tracking-widest">
-                      Text Found
-                    </span>
-                  </div>
+                  {!isReader && (
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-ios-blue animate-pulse" />
+                      <span className="text-xs text-ios-blue font-semibold uppercase tracking-widest">
+                        Text Found
+                      </span>
+                    </div>
+                  )}
                   <AnimatePresence mode="wait">
                     <motion.p 
                       key={textContent}
@@ -128,7 +136,9 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                       transition={{ duration: 0.35 }}
-                      className="text-base text-white/85 leading-relaxed whitespace-pre-wrap font-light"
+                      className={isReader
+                        ? "text-xl text-white leading-relaxed whitespace-pre-wrap font-medium"
+                        : "text-base text-white/85 leading-relaxed whitespace-pre-wrap font-light"}
                     >
                       {textContent}
                     </motion.p>

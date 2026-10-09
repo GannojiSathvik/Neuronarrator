@@ -1,6 +1,6 @@
 # NeuroNarrator
 
-An assistive web app for blind and visually impaired people. It watches through the phone camera, describes the scene out loud, reads Indian Rupee notes, helps find a named object, and recognises people the user has saved. It is operated by touch and voice rather than buttons.
+An assistive web app for blind and visually impaired people. It watches through the phone camera, describes the scene out loud, reads printed text, reads Indian Rupee notes, helps find a named object, and recognises people the user has saved. It is operated by touch and voice rather than buttons.
 
 > **Status:** prototype. The original version was generated with [Lovable](https://lovable.dev) and is published by its owner at <https://neuronarrator.lovable.app>. This repository keeps that full commit history and adds later fixes (see [Credits](#credits)).
 
@@ -9,11 +9,12 @@ An assistive web app for blind and visually impaired people. It watches through 
 | Feature | How it works |
 |---|---|
 | **Scene description** (Standard mode) | Every captured frame is described in one or two casual sentences, with rough distances and positions. |
+| **Text reader** (Read mode) | Say "read this" or "what does it say" (or "Neuro read" hands-free). The app says what kind of thing it is, such as "Looks like a menu", then reads the text out and shows it large on screen. |
 | **Currency reader** | Identifies Indian Rupee notes and coins and says the total. |
 | **Item finder** | "Find my keys": a high ping and vibration when the item is visible, a low thrum when it isn't, and spoken directions when found. |
 | **Hazard alerts** | The model rates each scene 1–10. Above 7 the app says "Warning", vibrates an SOS-style pattern, shows a banner and plays alarm tones. |
 | **Face recognition** | Runs in the browser with face-api.js. Say "Neuro remember Ronit" while someone is in view, and later descriptions use their name, relationship and how long since you last saw them. |
-| **Voice control** | Hold anywhere to speak a command (push-to-talk), or say "Neuro …" hands-free. Recognition uses the browser's Web Speech API tuned for Indian English (`en-IN`). |
+| **Voice control** | Hold anywhere to speak a command (push-to-talk): "describe", "read this", "count notes", "find my keys". Hands-free, say "Neuro describe", "Neuro read", "Neuro currency" or "Neuro find my keys". Recognition uses the browser's Web Speech API tuned for Indian English (`en-IN`). |
 | **Speech output** | Sarvam AI text-to-speech; falls back to the browser's built-in voice if that fails. |
 | **Haptic Braille** | The first words of a hazard warning are vibrated as Braille patterns. |
 
@@ -124,8 +125,6 @@ The frontend calls all three with `supabase.functions.invoke`. Each returns JSON
 | `text-to-speech` | `{ text, speaker?: "anushka"\|"abhilash" }` (text truncated to 500 chars) | `{ audioBase64 }` | 400 · 429 rate limited · 502 Sarvam error · 504 timeout (8 s) |
 | `speech-to-text` | `{ audioBase64 (webm), language_code?: "en-IN" }` | `{ transcript }` | 400 · 502 Sarvam error |
 
-The `reader` mode exists in the backend but the current UI never sends it.
-
 ## Testing
 
 ```bash
@@ -134,7 +133,7 @@ npm run lint
 npm run build
 ```
 
-The tests cover push-to-talk command parsing and face registration from a voice command. The edge functions have no automated tests. They were checked by running them locally in Deno and sending requests.
+The tests cover push-to-talk command parsing, the hands-free "Neuro read" matcher, and face registration from a voice command. The edge functions have no automated tests. They were checked by running them locally in Deno and sending requests.
 
 ## Security and privacy notes
 
@@ -149,7 +148,7 @@ The tests cover push-to-talk command parsing and face registration from a voice 
 - The TTS request's `AbortController` is never passed to the fetch, so stopping speech doesn't cancel a request already in flight.
 - face-api.js is unmaintained, loads its model weights from a third-party GitHub Pages URL, and makes the JS bundle about 1.45 MB.
 - Flipping the camera during face detection can log an uncaught face-api.js error. The app keeps running.
-- Currency phrases are matched before finder phrases, so "find my money" switches to currency mode.
+- Speech goes through Sarvam text-to-speech, which cuts text at 500 characters, so a long page in Read mode is only partly read aloud. The full text is still shown on screen.
 - `npm run lint` still reports issues in the original code (mostly `any` types and empty `catch` blocks).
 
 ## Credits

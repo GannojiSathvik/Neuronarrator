@@ -18,12 +18,34 @@ describe("parseCommand (push-to-talk)", () => {
     expect(parseCommand("What do you see")).toEqual({ mode: "standard", targetItem: "" });
   });
 
+  it.each(["read", "Read this", "read text", "What does it say?", "read the sign", "padho", "tell me what it says"])(
+    "maps '%s' to reader mode",
+    (phrase) => {
+      expect(parseCommand(phrase)).toEqual({ mode: "reader", targetItem: "" });
+    },
+  );
+
+  it("keeps describe phrases in standard mode now that 'read' has its own mode", () => {
+    for (const phrase of ["describe", "what is this", "look around", "standard"]) {
+      expect(parseCommand(phrase)).toEqual({ mode: "standard", targetItem: "" });
+    }
+  });
+
+  it("does not treat words that merely contain 'read' as a read command", () => {
+    expect(parseCommand("I'm ready")).toBeNull();
+  });
+
   it("returns null for unrecognised speech", () => {
     expect(parseCommand("hello there")).toBeNull();
   });
 
   it("checks finder before currency, so 'find my money' looks for the money", () => {
     expect(parseCommand("find my money")).toEqual({ mode: "finder", targetItem: "money" });
+  });
+
+  it("checks finder before reader, so 'find my reading glasses' looks for the glasses", () => {
+    expect(parseCommand("find my reading glasses")).toEqual({ mode: "finder", targetItem: "reading glasses" });
+    expect(parseCommand("where is my book I was reading")).toEqual({ mode: "finder", targetItem: "book i was reading" });
   });
 });
 
@@ -59,6 +81,7 @@ describe("push-to-talk command routing", () => {
     ["count notes", "currency", ""],
     ["how much money", "currency", ""],
     ["describe", "standard", ""],
+    ["read this", "reader", ""],
   ] as const)("routes '%s' to %s", (command, mode, target) => {
     const { result } = renderHook(() => useVoiceControl());
     act(() => result.current.startListening());

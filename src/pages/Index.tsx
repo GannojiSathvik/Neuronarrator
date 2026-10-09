@@ -121,6 +121,11 @@ const Index = () => {
   const { playHazardSound, unlock: unlockHazardSound } = useHazardSound();
   const { playFoundPing, playNotFoundThrum, playListeningChime } = useFinderSound();
 
+  // Spoken questions are answered by askQuestion (defined further down, once the camera and
+  // speech helpers exist); both voice hooks reach it through this stable callback.
+  const askQuestionRef = useRef<(question: string) => void>(() => {});
+  const askQuestionStable = useCallback((question: string) => askQuestionRef.current(question), []);
+
   // Voice control for mode switching (push-to-talk)
   const {
     isListening: isVoiceControlListening,
@@ -132,7 +137,7 @@ const Index = () => {
     stopListening: stopVoiceControl,
     setCommandMode,
     setTargetItem,
-  } = useVoiceControl();
+  } = useVoiceControl({ onQuestion: askQuestionStable });
   // After release, push-to-talk can take a few seconds to transcribe on the server. Don't start
   // a capture or narrate over it; the command decides what happens next.
   const transcribingRef = useRef(false);
@@ -331,6 +336,7 @@ const Index = () => {
     onClearCommand: handleVoiceClear,
     onStopCommand: handleVoiceStop,
     onModeSwitch: handleModeSwitch,
+    onQuestion: askQuestionStable,
     enabled: isAutoCapturing && !isVoiceControlListening && !isVoiceControlTranscribing && !addPersonOpen && !settingsOpen,
   });
 
@@ -390,6 +396,60 @@ const Index = () => {
       }
     };
   }, [isAutoCapturing, isBusy, isSpeaking, stop, speak]);
+
+  // A spoken question that isn't a mode command ("what am I holding?"): grab the current frame,
+  // ask the vision AI, and speak its answer. The newest request wins, like a Describe tap.
+  const askQuestion = useCallback(async (question: string) => {
+    if (!isActiveRef.current) return;
+    if (demoModeRef.current) {
+      speak("Demo mode is on, so I can't look right now. Turn it off in Settings to ask me things.", 6, {});
+      return;
+    }
+    const frame = cameraRef.current?.getScreenshot();
+    if (!frame) {
+      speak("I can't see anything right now. Is the camera on?", 6, {});
+      return;
+    }
+    const cycle = ++analysisCycleRef.current;
+    isAnalyzingRef.current = true;
+    analysisStartedAtRef.current = Date.now();
+    setAnalysisState("analyzing");
+    setCaptionText(`You asked: ${question}`);
+    setTextContent("");
+    speak("Let me look.", 6, {});
+    // If a face was just recognised, tell the AI who it is so "who is this?" can be answered
+    const knownFaces: KnownFaceInfo[] = lastMatch?.known && lastMatch.context
+      ? [{
+          name: lastMatch.context.name,
+          relation: lastMatch.context.relation,
+          daysSinceLastSeen: lastMatch.context.daysSinceLastSeen,
+          isLongAbsence: lastMatch.context.isLongAbsence,
+        }]
+      : [];
+    try {
+      const result = await analyzeImageService(frame, "general", knownFaces, "", "", question);
+      dispatchConnection("success");
+      if (cycle !== analysisCycleRef.current || !isActiveRef.current) return;
+      setPriority(result.priority);
+      setCaptionText(result.description);
+      setAnalysisState("success");
+      speechStartedAtRef.current = Date.now();
+      speak(result.description, result.priority > 7 ? 10 : 6, { onEnd: onSpeechEnd });
+    } catch (error) {
+      dispatchConnection("failure");
+      if (cycle !== analysisCycleRef.current || !isActiveRef.current) return;
+      console.error("[Ask] Question failed:", error);
+      setAnalysisState("error");
+      setCaptionText("Couldn't get an answer");
+      speak("Sorry, I couldn't get an answer. Please try again.", 6, {});
+    } finally {
+      if (cycle === analysisCycleRef.current) {
+        isAnalyzingRef.current = false;
+        analysisStartedAtRef.current = 0;
+      }
+    }
+  }, [speak, lastMatch, onSpeechEnd]);
+  askQuestionRef.current = askQuestion;
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     if (isAnalyzingRef.current || modalOpenRef.current || !isActiveRef.current || pushToTalkHeldRef.current || transcribingRef.current) return;

@@ -20,6 +20,8 @@ export interface LiveCameraRef {
   getVideoElement: () => HTMLVideoElement | null;
   /** Whether the preview is drawn mirrored, so face boxes must be flipped to match the screen */
   isMirrored: () => boolean;
+  /** The current frame as a JPEG data URL, for answering a spoken question about it */
+  getScreenshot: () => string | null;
 }
 
 // The preview is shown exactly as the camera sees it (react-webcam's `mirrored` is off), for the
@@ -54,6 +56,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   const mirrored = isPreviewMirrored(facingMode);
   useImperativeHandle(ref, () => ({
     getVideoElement: () => webcamRef.current?.video ?? null,
+    getScreenshot: () => webcamRef.current?.getScreenshot() ?? null,
     isMirrored: () => mirrored,
   }), [mirrored]);
  

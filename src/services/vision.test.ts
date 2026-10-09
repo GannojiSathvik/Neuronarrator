@@ -78,3 +78,13 @@ describe("vision service boundary", () => {
     );
   });
 });
+
+describe("analyzeImage question", () => {
+  it("sends a spoken question to the server", async () => {
+    invoke.mockReset();
+    invoke.mockResolvedValue({ data: { text_content: "", description: "A red mug.", hazards: [], priority: 1 }, error: null });
+    const { analyzeImage } = await import("./vision");
+    await analyzeImage("data:image/jpeg;base64,AAAA", "general", [], "", "", "what am I holding");
+    expect(invoke.mock.calls[0][1].body.question).toBe("what am I holding");
+  });
+});

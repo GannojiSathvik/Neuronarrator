@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isReaderCommand, useVoiceCommand } from "./useVoiceCommand";
+import { isReaderCommand, questionAfterWakeWord, useVoiceCommand } from "./useVoiceCommand";
 
 describe("isReaderCommand (hands-free)", () => {
   it.each(["neuro read", "neuro read this", "neural read", "nero read the sign", "neuro, read", "neuro reader"])(
@@ -64,4 +64,16 @@ describe("useVoiceCommand (hands-free)", () => {
       expect(cb.onRememberCommand).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("questionAfterWakeWord", () => {
+  it("turns 'neuro <question>' into a question for the AI", () => {
+    expect(questionAfterWakeWord("Neuro, what am I holding?")).toBe("what am i holding");
+    expect(questionAfterWakeWord("nero is the light on")).toBe("is the light on");
+  });
+
+  it("ignores speech without the wake word, or with fewer than two words after it", () => {
+    expect(questionAfterWakeWord("what am I holding")).toBeNull();
+    expect(questionAfterWakeWord("neuro hello")).toBeNull();
+  });
 });

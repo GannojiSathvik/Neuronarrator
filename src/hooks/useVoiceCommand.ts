@@ -1,4 +1,5 @@
 import { useRef, useCallback, useEffect, useState } from "react";
+import { normalizeTranscript } from "@/lib/voiceText";
 
 /**
  * Always-on voice command listener using the browser's free SpeechRecognition API.
@@ -80,7 +81,17 @@ interface UseVoiceCommandOptions {
   onClearCommand: () => void;
   onStopCommand?: () => void;
   onModeSwitch?: (mode: "standard" | "reader" | "currency" | "finder", targetItem?: string) => void;
+  /** "neuro <question>" that isn't a command: answered by the vision AI about the current view */
+  onQuestion?: (question: string) => void;
   enabled: boolean;
+}
+
+/** The words after the wake word, if there are at least two of them ("neuro what am I holding"). */
+export function questionAfterWakeWord(transcript: string): string | null {
+  const heard = normalizeTranscript(transcript);
+  if (!heard.startsWith("neuro ")) return null;
+  const rest = heard.slice("neuro ".length).trim();
+  return rest.split(" ").filter(Boolean).length >= 2 ? rest : null;
 }
 
 // Detach all handlers before stopping so a replaced instance can't fire commands or schedule restarts
@@ -94,7 +105,7 @@ function detachAndAbort(recognition: SpeechRecognitionLike) {
   } catch { /* already stopped */ }
 }
 
-export function useVoiceCommand({ onRememberCommand, onClearCommand, onStopCommand, onModeSwitch, enabled }: UseVoiceCommandOptions) {
+export function useVoiceCommand({ onRememberCommand, onClearCommand, onStopCommand, onModeSwitch, onQuestion, enabled }: UseVoiceCommandOptions) {
   const [isListening, setIsListening] = useState(false);
   const [lastCommand, setLastCommand] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -116,6 +127,8 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onStopComma
   useEffect(() => { onRememberRef.current = onRememberCommand; }, [onRememberCommand]);
   useEffect(() => { onClearRef.current = onClearCommand; }, [onClearCommand]);
   useEffect(() => { onModeSwitchRef.current = onModeSwitch; }, [onModeSwitch]);
+  const onQuestionRef = useRef(onQuestion);
+  useEffect(() => { onQuestionRef.current = onQuestion; }, [onQuestion]);
 
   const clearRestartTimeout = useCallback(() => {
     if (restartTimeoutRef.current) {
@@ -257,6 +270,16 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onStopComma
               }
             }
           }
+        }
+
+        // No command in any alternative: "neuro <anything else>" is a question for the AI about
+        // what the camera sees. Only the top reading is used, so a garbled guess isn't asked.
+        const question = questionAfterWakeWord(result[0].transcript);
+        if (question && onQuestionRef.current) {
+          console.log("[VoiceCmd] ✅ QUESTION ->", question);
+          setLastCommand(`Ask: ${question}`);
+          onQuestionRef.current(question);
+          return;
         }
       }
     };

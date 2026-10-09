@@ -39,6 +39,7 @@ export async function analyzeImage(
   knownFaces: KnownFaceInfo[] = [],
   previousDescription: string = "",
   targetItem: string = "",
+  question: string = "",
 ): Promise<VisionResponse> {
   const { data, error } = await supabase.functions.invoke("analyze-image", {
     body: {
@@ -47,6 +48,8 @@ export async function analyzeImage(
       knownFaces,
       previousDescription,
       targetItem,
+      // A spoken question, answered about this frame instead of the mode's usual task
+      ...(question ? { question: question.slice(0, 300) } : {}),
     },
     // Longer than analyze-image's 13s server budget (so a late fallback answer still arrives)
     // but shorter than the 15s watchdog, so a hung request can't lock the capture guard.

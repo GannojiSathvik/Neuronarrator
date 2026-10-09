@@ -133,6 +133,19 @@ interface VisionResult {
   found?: boolean;
 }
 
+const QUESTION_PROMPT = `You are the eyes of a blind friend. They just asked you a question out loud, and you can see what their camera sees.
+
+You MUST respond with ONLY valid JSON — no extra text before or after:
+{"text_content":"Any text you read to answer, word-for-word. Empty string if none.","description":"YOUR SPOKEN ANSWER","hazards":["any dangers"],"priority":1}
+
+Rules:
+- Answer the question directly, in 1–2 short, warm spoken sentences ("you" perspective). No preamble.
+- Use what you see in the image. If the question isn't about the image (e.g. a general question), answer it briefly anyway.
+- If you can't tell from the image, say so plainly and suggest how to point the camera ("Hold it a bit closer").
+- If you notice a real danger, mention it and set priority 8 or higher.
+
+CRITICAL: Output ONLY the JSON object. No markdown, no backticks, no extra words.`;
+
 const buildFinderPrompt = (targetItem: string) => `You are helping a blind person find a specific item. The item they are looking for is: "${targetItem}".
 
 You MUST respond with ONLY valid JSON — no extra text before or after:
@@ -183,6 +196,7 @@ serve(async (req) => {
       knownFaces = [],
       previousDescription: rawPreviousDescription = "",
       targetItem: rawTargetItem = "",
+      question: rawQuestion = "",
     } = body;
 
     if (!imageBase64) {
@@ -206,6 +220,11 @@ serve(async (req) => {
     // Both are interpolated into the prompt; cap them so one request can't send an essay.
     const previousDescription = rawPreviousDescription.slice(0, 1000);
     const targetItem = rawTargetItem.slice(0, 100);
+    if (typeof rawQuestion !== "string") {
+      return badRequest("question must be a string");
+    }
+    // A spoken question from the user (push-to-talk or "neuro …"), answered about this frame.
+    const question = rawQuestion.trim().slice(0, 300);
 
     // Select system prompt based on mode
     let systemPrompt: string;
@@ -222,6 +241,7 @@ serve(async (req) => {
       default:
         systemPrompt = GENERAL_PROMPT;
     }
+    if (question) systemPrompt = QUESTION_PROMPT;
 
     // Build user prompt
     let userPrompt: string;
@@ -238,9 +258,10 @@ serve(async (req) => {
       default:
         userPrompt = "What's in front of me?";
     }
+    if (question) userPrompt = `My question: "${question}"`;
 
     // Add known faces context for general mode
-    if (knownFaces.length > 0 && mode === "general") {
+    if (knownFaces.length > 0 && (mode === "general" || question)) {
       const faceLines = knownFaces.map((f: KnownFace) => {
         let line = `${f.name} — ${f.relation}`;
         if (f.daysSinceLastSeen !== undefined && f.daysSinceLastSeen > 0) {
@@ -256,7 +277,7 @@ serve(async (req) => {
       userPrompt += `\n\nPeople I recognize here: ${faceLines}. Use their names naturally. Mention their relationship and when you last saw them if it's been a while (more than a day). If you just saw them today, don't mention timing.`;
     }
 
-    if (previousDescription && mode === "general") {
+    if (previousDescription && mode === "general" && !question) {
       userPrompt += `\n\nLast time you said: "${previousDescription}"\nIf the scene is basically the same, keep it super brief or mention something different. Don't repeat yourself.`;
     }
 

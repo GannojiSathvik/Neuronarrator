@@ -200,7 +200,14 @@ function modeEcho(mode: CommandMode, item: string): string {
 /** After this many server failures in a row, push-to-talk stops trying the server this session. */
 export const MAX_SERVER_FAILURES = 2;
 
-export function useVoiceControl(): UseVoiceControlReturn {
+interface UseVoiceControlOptions {
+  /** Speech that isn't a mode command is a question for the vision AI about the current view */
+  onQuestion?: (question: string) => void;
+}
+
+export function useVoiceControl({ onQuestion }: UseVoiceControlOptions = {}): UseVoiceControlReturn {
+  const onQuestionRef = useRef(onQuestion);
+  onQuestionRef.current = onQuestion;
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -230,6 +237,13 @@ export function useVoiceControl(): UseVoiceControlReturn {
       setCommandMode(parsed.mode);
       setTargetItem(parsed.targetItem);
     } else {
+      const words = normalizeTranscript(text).replace(/^neuro\s+/, "").split(" ").filter(Boolean);
+      if (words.length >= 2 && onQuestionRef.current) {
+        // Not a mode command: ask the AI and let it answer, instead of listing what can be said
+        console.log("[VoiceControl] Asking the AI:", text);
+        onQuestionRef.current(words.join(" "));
+        return;
+      }
       console.log("[VoiceControl] No command recognized in:", text);
       // Say what was heard, so the user can tell a mishearing ("I heard: fine my kiss") from a
       // phrase that simply isn't a command.

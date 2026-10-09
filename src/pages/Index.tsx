@@ -24,6 +24,10 @@ import { Settings, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { readerSpeech } from "@/lib/readerSpeech";
 import { confirmStep } from "@/lib/confirmWindow";
+import { shouldSkipRepeat, type SpokenMemory } from "@/lib/novelty";
+import { readAutoDescribe, shouldAutoContinue, writeAutoDescribe } from "@/lib/autoDescribe";
+import { memoryRepository } from "@/lib/memoryRepository";
+import { lastTimeSentence } from "@/lib/memory";
 
 type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 
@@ -68,6 +72,27 @@ const Index = () => {
   const unknownFacePauseUntilRef = useRef<number>(0);
   const lastUnknownDescriptorRef = useRef<Float32Array | null>(null);
   const UNKNOWN_FACE_PAUSE_MS = 5000;
+  // Spoken once per unknown-face appearance: a blind user can't read the caption.
+  const UNKNOWN_FACE_PROMPT = "There's someone I don't know in front of you. To save them, say neuro remember and their name.";
+
+  // Auto-describe off (the default): describe only when asked. Hazards are only detected during
+  // a capture, so in this mode there are no continuous hazard alerts between requests.
+  const [autoDescribe, setAutoDescribe] = useState(readAutoDescribe);
+  const autoDescribeRef = useRef(autoDescribe);
+  autoDescribeRef.current = autoDescribe;
+  // Set by an explicit request (Describe button, voice, mode switch) and read by the capture it
+  // starts: an answer the user asked for is spoken even if it repeats the last one.
+  const requestedCaptureRef = useRef(false);
+
+  // What was last said aloud, so a rephrasing of an unchanged scene isn't spoken again
+  const lastSpokenRef = useRef<SpokenMemory | null>(null);
+  const QUIET_REPEAT_DELAY_MS = 2500;
+  // End of that quiet gap; the watchdog must not cut it short
+  const quietUntilRef = useRef(0);
+  // Familiar faces whose latest memory note was already spoken: person id → last seen. A person
+  // gone for PERSON_ABSENCE_RESET_MS counts as a new appearance and is reminded again.
+  const announcedPeopleRef = useRef(new Map<number, number>());
+  const PERSON_ABSENCE_RESET_MS = 60_000;
 
   const { speak, stop, isSpeaking, isBusy } = useNeuroVoice();
   const { sosPattern } = useHaptics();
@@ -92,6 +117,8 @@ const Index = () => {
     : commandMode === "finder" ? "finder" 
     : commandMode === "reader" ? "reader"
     : "general";
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
   const {
     isModelsLoaded,
@@ -133,8 +160,23 @@ const Index = () => {
   }, [isBusy]);
 
   const onSpeechEnd = useCallback(() => {
+    if (!shouldAutoContinue(modeRef.current, autoDescribeRef.current)) {
+      speechStartedAtRef.current = 0;
+      return;
+    }
     triggerNextCapture();
   }, [triggerNextCapture]);
+
+  // One capture the user asked for. Dropped while a capture or speech is in progress — the
+  // callers that run after speech (e.g. a mode confirmation's onEnd) ask again once it ends.
+  const requestCapture = useCallback(() => {
+    if (!isActiveRef.current || modalOpenRef.current || isAnalyzingRef.current || isBusy()) return;
+    requestedCaptureRef.current = true;
+    speechStartedAtRef.current = 0;
+    setCaptureRequestId(prev => prev + 1);
+  }, [isBusy]);
+  const requestCaptureRef = useRef(requestCapture);
+  requestCaptureRef.current = requestCapture;
 
   // A mode or finder-target change makes any in-flight capture stale: its result was asked
   // for in the old mode and would talk over the mode confirmation. Abandon it, the same way
@@ -148,6 +190,17 @@ const Index = () => {
     analysisCycleRef.current += 1;
     isAnalyzingRef.current = false;
     analysisStartedAtRef.current = 0;
+    lastSpokenRef.current = null;
+    if (!autoDescribeRef.current) {
+      // Without auto-describe a mode switch is itself a request: describe once in the new mode.
+      // Push-to-talk confirms with browser speech the loop can't see, so wait for it to finish.
+      // A hands-free switch already asks once its spoken confirmation ends; don't ask twice.
+      const capturesBefore = captureCountRef.current;
+      const timer = window.setTimeout(() => {
+        if (captureCountRef.current === capturesBefore) requestCaptureRef.current();
+      }, 1500);
+      return () => window.clearTimeout(timer);
+    }
   }, [mode, targetItem]);
 
   // Voice registration opens the same review/consent step as the visible Add control.
@@ -198,15 +251,18 @@ const Index = () => {
   const handleModeSwitch = useCallback((newMode: "standard" | "reader" | "currency" | "finder", item?: string) => {
     console.log("[ModeSwitch] Hands-free mode switch:", newMode, item);
     setCommandMode(newMode as CommandMode);
+    // "neuro describe" (= standard) is how a hands-free user asks for a description, so without
+    // auto-describe the confirmation is followed by one capture instead of nothing.
+    const onConfirmed = () => (autoDescribeRef.current ? onSpeechEnd() : requestCaptureRef.current());
     if (newMode === "finder" && item) {
       setTargetItem(item);
-      speak(`Finder Mode. Looking for ${item}.`, 5, { onEnd: onSpeechEnd });
+      speak(`Finder Mode. Looking for ${item}.`, 5, { onEnd: onConfirmed });
     } else if (newMode === "currency") {
-      speak("Currency Mode. Show me the notes.", 5, { onEnd: onSpeechEnd });
+      speak("Currency Mode. Show me the notes.", 5, { onEnd: onConfirmed });
     } else if (newMode === "reader") {
-      speak("Read Mode. Point me at the text.", 5, { onEnd: onSpeechEnd });
+      speak("Read Mode. Point me at the text.", 5, { onEnd: onConfirmed });
     } else {
-      speak("Standard Mode. Describing scene.", 5, { onEnd: onSpeechEnd });
+      speak("Standard Mode. Describing scene.", 5, { onEnd: onConfirmed });
     }
     // Vibrate for confirmation
     if ("vibrate" in navigator) {
@@ -247,12 +303,21 @@ const Index = () => {
           analysisCycleRef.current += 1;
           isAnalyzingRef.current = false;
           analysisStartedAtRef.current = 0;
-          setCaptureRequestId(prev => prev + 1);
+          if (shouldAutoContinue(modeRef.current, autoDescribeRef.current, false)) {
+            setCaptureRequestId(prev => prev + 1);
+          } else {
+            // Nobody is waiting on a loop: say the request failed rather than retrying unasked
+            setAnalysisState("error");
+            setCaptionText("That took too long. Tap Describe to try again.");
+            speak("That took too long. Tap Describe to try again.", 5, {});
+          }
           return;
         }
       }
 
       if (isActiveRef.current && !isAnalyzingRef.current && !isBusy()) {
+        // The watchdog keeps a stalled loop going; without auto-describe there's no loop to keep
+        if (!autoDescribeRef.current || Date.now() < quietUntilRef.current) return;
         console.log("Watchdog: forcing next capture");
         setCaptureRequestId(prev => prev + 1);
       } else if (isActiveRef.current && isBusy() && !isSpeaking() && speechStartedAtRef.current > 0) {
@@ -263,7 +328,7 @@ const Index = () => {
           console.warn("Watchdog: speech stuck loading for 12s+, forcing stop & next capture");
           stop();
           speechStartedAtRef.current = 0;
-          setCaptureRequestId(prev => prev + 1);
+          if (autoDescribeRef.current) setCaptureRequestId(prev => prev + 1);
         }
       }
     }, 5000);
@@ -274,7 +339,7 @@ const Index = () => {
         watchdogTimerRef.current = null;
       }
     };
-  }, [isAutoCapturing, isBusy, isSpeaking, stop]);
+  }, [isAutoCapturing, isBusy, isSpeaking, stop, speak]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     if (isAnalyzingRef.current || modalOpenRef.current || !isActiveRef.current) return;
@@ -284,6 +349,8 @@ const Index = () => {
     captureCountRef.current += 1;
     const cycle = ++analysisCycleRef.current;
     const isStale = () => cycle !== analysisCycleRef.current || !isActiveRef.current || modalOpenRef.current;
+    const requested = requestedCaptureRef.current;
+    requestedCaptureRef.current = false;
 
     setAnalysisState("analyzing");
 
@@ -291,6 +358,7 @@ const Index = () => {
       // Face detection (only for general mode)
       let knownFaces: KnownFaceInfo[] = [];
       let hasUnknownFace = false;
+      let seenPersonId: number | undefined;
       if (isModelsLoaded && mode === "general") {
         const video = cameraRef.current?.getVideoElement();
         if (video && video.readyState >= 2) {
@@ -306,6 +374,7 @@ const Index = () => {
                   daysSinceLastSeen: match.context.daysSinceLastSeen,
                   isLongAbsence: match.context.isLongAbsence,
                 }];
+                seenPersonId = match.id;
               } else if (!match.known) {
                 hasUnknownFace = true;
               }
@@ -323,35 +392,96 @@ const Index = () => {
         // Arm the pause once per unknown-face appearance. Re-arming on expiry (the old behaviour)
         // meant the scene was never described while an unregistered face stayed in frame.
         // The pause is reset to 0 once no unknown face is seen (below) or after a registration.
-        if (unknownFacePauseUntilRef.current === 0) {
-          unknownFacePauseUntilRef.current = now + UNKNOWN_FACE_PAUSE_MS;
-          console.log("[Loop] Unknown face detected — pausing TTS for 5s for voice registration");
-          stop();
+        // Infinity = the prompt is being spoken. The answer window starts once it ends (its onEnd),
+        // or here if that callback was dropped because the speech was cut off.
+        const startAnswerWindow = () => {
+          if (unknownFacePauseUntilRef.current !== Infinity) return;
+          unknownFacePauseUntilRef.current = Date.now() + UNKNOWN_FACE_PAUSE_MS;
           forceRestartVoice();
+        };
+        if (unknownFacePauseUntilRef.current === 0) {
+          unknownFacePauseUntilRef.current = Infinity;
+          console.log("[Loop] Unknown face detected — announcing, then pausing TTS for 5s for voice registration");
+          setAnalysisState("success");
+          setCaptionText("Unknown face detected — say \"Neuro remember [name]\" to save");
+          // The prompt itself says "neuro remember"; keep the command listener from hearing it
+          pauseVoiceCommand();
+          speechStartedAtRef.current = Date.now();
+          speak(UNKNOWN_FACE_PROMPT, 5, { onEnd: () => { startAnswerWindow(); onSpeechEnd(); } });
+          return;
         }
+        startAnswerWindow();
 
-        if (now < unknownFacePauseUntilRef.current) {
+        // An explicit request (Describe, a mode switch) is answered even inside the window
+        if (!requested && now < unknownFacePauseUntilRef.current) {
           setAnalysisState("success");
           setCaptionText("Unknown face detected — say \"Neuro remember [name]\" to save");
           isAnalyzingRef.current = false;
           analysisStartedAtRef.current = 0;
-          setTimeout(() => {
-            if (isActiveRef.current && !isAnalyzingRef.current) {
-              setCaptureRequestId(prev => prev + 1);
-            }
-          }, 1500);
+          if (shouldAutoContinue(mode, autoDescribeRef.current)) {
+            setTimeout(() => {
+              if (isActiveRef.current && !isAnalyzingRef.current) {
+                setCaptureRequestId(prev => prev + 1);
+              }
+            }, 1500);
+          }
           return;
         }
       } else if (mode === "general") {
         unknownFacePauseUntilRef.current = 0;
       }
 
+      // A familiar face's latest memory note is spoken once per appearance. Look it up while the
+      // vision request runs.
+      const seenAt = Date.now();
+      announcedPeopleRef.current.forEach((lastSeen, id) => {
+        if (seenAt - lastSeen >= PERSON_ABSENCE_RESET_MS) announcedPeopleRef.current.delete(id);
+      });
+      let reminderLookup: Promise<string> | null = null;
+      if (seenPersonId !== undefined) {
+        if (announcedPeopleRef.current.has(seenPersonId)) {
+          announcedPeopleRef.current.set(seenPersonId, seenAt);
+        } else {
+          reminderLookup = memoryRepository.latestMemory(seenPersonId)
+            .then(memory => (memory ? lastTimeSentence(memory.body) : ""))
+            .catch(() => "");
+        }
+      }
+
       // Send image to vision API with mode + targetItem
       const result = await analyzeImageService(base64, mode, knownFaces, lastDescriptionRef.current, targetItem);
+      const reminder = reminderLookup ? await reminderLookup : "";
       if (isStale()) {
         console.log("[Loop] Discarding result from an abandoned capture cycle");
         return;
       }
+      // Nothing to remind them of: don't look again for this appearance
+      if (reminderLookup && !reminder && seenPersonId !== undefined) {
+        announcedPeopleRef.current.set(seenPersonId, Date.now());
+      }
+
+      // Unchanged-scene check. Never for an answer the user asked for; hazards and a found item
+      // skip it below because they are always spoken.
+      const isRepeat = (text: string) =>
+        !requested && shouldSkipRepeat(lastSpokenRef.current, mode, text, Date.now());
+      const rememberSpoken = (text: string) => {
+        lastSpokenRef.current = { mode, text, spokenAt: Date.now() };
+      };
+      // Nothing new: update the caption silently and look again after a short quiet gap
+      const stayQuiet = () => {
+        console.log("[Loop] Scene unchanged — not repeating it");
+        setAnalysisState("success");
+        setShowWarning(false);
+        isAnalyzingRef.current = false;
+        analysisStartedAtRef.current = 0;
+        if (!shouldAutoContinue(mode, autoDescribeRef.current)) return;
+        quietUntilRef.current = Date.now() + QUIET_REPEAT_DELAY_MS;
+        setTimeout(() => {
+          if (isActiveRef.current && !isAnalyzingRef.current && !modalOpenRef.current) {
+            setCaptureRequestId(prev => prev + 1);
+          }
+        }, QUIET_REPEAT_DELAY_MS);
+      };
 
       setPriority(result.priority);
       setCaptionText(result.description);
@@ -372,10 +502,12 @@ const Index = () => {
           speak(result.description, 8, { onEnd: onSpeechEnd });
         } else {
           playNotFoundThrum();
-          // Short delay then next capture — no speech for not-found to keep scanning fast
+          // Short delay then next capture — no speech for not-found to keep scanning fast.
+          // Finder keeps scanning even with auto-describe off (see shouldAutoContinue).
           setAnalysisState("success");
           isAnalyzingRef.current = false;
           analysisStartedAtRef.current = 0;
+          if (!shouldAutoContinue(mode, autoDescribeRef.current, false)) return;
           setTimeout(() => {
             if (isActiveRef.current && !isAnalyzingRef.current) {
               setCaptureRequestId(prev => prev + 1);
@@ -386,8 +518,10 @@ const Index = () => {
       }
       // Handle currency mode
       else if (mode === "currency") {
+        if (isRepeat(result.description)) return stayQuiet();
         setAnalysisState("success");
         setShowWarning(false);
+        rememberSpoken(result.description);
         speechStartedAtRef.current = Date.now();
         speak(result.description, 5, { onEnd: onSpeechEnd });
       }
@@ -395,8 +529,12 @@ const Index = () => {
       // With no text, the description alone says so ("No text here, just ...").
       else if (mode === "reader") {
         const speechText = readerSpeech(result.description, result.text_content);
+        // Same page, same text: compare what was read, not the varying context line
+        const readKey = result.text_content.trim() || result.description;
+        if (isRepeat(readKey)) return stayQuiet();
         setAnalysisState("success");
         setShowWarning(false);
+        rememberSpoken(readKey);
         speechStartedAtRef.current = Date.now();
         speak(speechText, 5, { onEnd: onSpeechEnd });
       }
@@ -413,6 +551,8 @@ const Index = () => {
           setShowWarning(true);
           sosPattern();
           playHazardSound(result.priority);
+          // Hazards are always spoken, even when repeated
+          rememberSpoken(speechText);
           speechStartedAtRef.current = Date.now();
           speak(`Warning! ${result.description}`, 10, { onEnd: onSpeechEnd });
           // Braille the hazard name after the SOS pattern (~1.9s) — playHapticMessage calls
@@ -424,11 +564,15 @@ const Index = () => {
             if (isActiveRef.current) playHapticMessage(hazardWord);
           }, 2000);
         } else {
+          // A pending memory reminder is news even when the scene isn't
+          if (!reminder && isRepeat(speechText)) return stayQuiet();
           setAnalysisState("success");
           setShowWarning(false);
           playHazardSound(result.priority);
+          rememberSpoken(speechText);
+          if (reminder && seenPersonId !== undefined) announcedPeopleRef.current.set(seenPersonId, Date.now());
           speechStartedAtRef.current = Date.now();
-          speak(speechText, 5, { onEnd: onSpeechEnd });
+          speak(reminder ? `${speechText} ${reminder}` : speechText, 5, { onEnd: onSpeechEnd });
         }
       }
     } catch (error) {
@@ -438,7 +582,11 @@ const Index = () => {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
       setCaptionText(errorMsg);
       setTextContent("");
-      speak("Hmm, something went wrong. Retrying.", 5, { onEnd: onSpeechEnd });
+      speak(
+        shouldAutoContinue(mode, autoDescribeRef.current) ? "Hmm, something went wrong. Retrying." : "Hmm, something went wrong. Tap Describe to try again.",
+        5,
+        { onEnd: onSpeechEnd },
+      );
     } finally {
       // Only the current cycle owns the flags; a late, abandoned cycle must not clear them.
       if (cycle === analysisCycleRef.current) {
@@ -446,7 +594,7 @@ const Index = () => {
         analysisStartedAtRef.current = 0;
       }
     }
-  }, [speak, stop, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, isModelsLoaded, detectAndMatch, isBusy, forceRestartVoice]);
+  }, [speak, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, isModelsLoaded, detectAndMatch, isBusy, forceRestartVoice, pauseVoiceCommand]);
 
   const startStream = useCallback(() => {
     if (isAutoCapturing) return;
@@ -459,13 +607,17 @@ const Index = () => {
     unlockHazardSound();
 
     setTimeout(() => {
-      if (isActiveRef.current) {
-        // Increment rather than set to 1: if the id is already 1 (a restart after the first
-        // capture), setting 1 again is a no-op and the loop would wait for the watchdog.
-        setCaptureRequestId(prev => prev + 1);
+      if (!isActiveRef.current) return;
+      if (!autoDescribeRef.current) {
+        // No trigger words here ("neuro …"): the command listener would hear them
+        speak("Ready. Tap the Describe button when you want a description.", 5, {});
+        return;
       }
+      // Increment rather than set to 1: if the id is already 1 (a restart after the first
+      // capture), setting 1 again is a no-op and the loop would wait for the watchdog.
+      setCaptureRequestId(prev => prev + 1);
     }, 1500);
-  }, [isAutoCapturing, unlockHazardSound]);
+  }, [isAutoCapturing, unlockHazardSound, speak]);
 
   const stopStream = useCallback(() => {
     setIsAutoCapturing(false);
@@ -481,6 +633,9 @@ const Index = () => {
     speechStartedAtRef.current = 0;
     analysisStartedAtRef.current = 0;
     unknownFacePauseUntilRef.current = 0;
+    lastSpokenRef.current = null;
+    announcedPeopleRef.current.clear();
+    requestedCaptureRef.current = false;
     setAnalysisState("idle");
     setCaptionText("");
     setTextContent("");
@@ -558,7 +713,7 @@ const Index = () => {
       if (commandMode === "currency") return "💰 Currency Mode";
       if (commandMode === "finder") return `🔍 Searching for: ${targetItem}`;
       if (commandMode === "reader") return "📖 Read Mode";
-      return "👁 Scanning";
+      return autoDescribe ? "👁 Scanning" : "👁 Ready — tap Describe";
     }
     return "Touch anywhere to start";
   };
@@ -628,6 +783,20 @@ const Index = () => {
             {getStatusText()}
           </p>
         </div>
+        {isAutoCapturing && !autoDescribe && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              stop(); // a fresh request interrupts whatever is being said
+              requestCapture();
+            }}
+            disabled={analysisState === "analyzing"}
+            className="glass-panel super-ellipse-sm min-h-12 px-6 py-3 text-base font-semibold text-ios-blue disabled:opacity-50"
+            aria-label="Describe now: describe what is in front of me"
+          >
+            Describe now
+          </button>
+        )}
         {isAutoCapturing && (
           <button
             onClick={(e) => {
@@ -675,7 +844,15 @@ const Index = () => {
       />
 
       {/* Settings Modal */}
-      <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        autoDescribe={autoDescribe}
+        onAutoDescribeChange={(enabled) => {
+          setAutoDescribe(enabled);
+          writeAutoDescribe(enabled);
+        }}
+      />
 
       {/* Add Person Modal */}
       <AddPersonModal

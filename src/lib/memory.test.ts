@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  lastTimeSentence,
   memoryExcerpt,
   searchMemories,
   tokenize,
@@ -92,5 +93,32 @@ describe("person-scoped recall", () => {
         occurredAt: new Date(Date.now() + 86_400_000),
       }),
     ).toThrow();
+  });
+});
+
+describe("lastTimeSentence", () => {
+  it("speaks only the note's first sentence, in its own words", () => {
+    expect(
+      lastTimeSentence(
+        "Arjun and I met for coffee at the café near the park. He is training for a half marathon.",
+      ),
+    ).toBe("Last time: Arjun and I met for coffee at the café near the park.");
+  });
+
+  it("does not cut a sentence at a title like Dr.", () => {
+    expect(lastTimeSentence("Saw Dr. Rao about my knee. She said rest it.")).toBe(
+      "Last time: Saw Dr. Rao about my knee.",
+    );
+  });
+
+  it("adds a period to a note without one and caps long sentences", () => {
+    expect(lastTimeSentence("  coffee   on Sunday ")).toBe("Last time: coffee on Sunday.");
+    const long = lastTimeSentence(`${"We talked about the trip ".repeat(10)}today.`);
+    expect(long.length).toBeLessThanOrEqual("Last time: ".length + 121);
+    expect(long.endsWith("…")).toBe(true);
+  });
+
+  it("says nothing for an empty note", () => {
+    expect(lastTimeSentence("   ")).toBe("");
   });
 });

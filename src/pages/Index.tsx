@@ -22,6 +22,7 @@ import { PushToTalkOverlay } from "@/components/PushToTalkOverlay";
 import { analyzeImage as analyzeImageService, type VisionMode, type KnownFaceInfo } from "@/services/vision";
 import { Settings, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { confirmStep } from "@/lib/confirmWindow";
 
 type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 
@@ -178,7 +179,15 @@ const Index = () => {
     stop();
   }, [isModelsLoaded, detectAndMatch, speak, stop]);
 
+  // When "neuro forget all" was last heard; a misheard phrase must not wipe every face, so it takes two
+  const voiceClearArmedAtRef = useRef<number | null>(null);
   const handleVoiceClear = useCallback(() => {
+    const { confirmed, armedAt } = confirmStep(voiceClearArmedAtRef.current, Date.now());
+    voiceClearArmedAtRef.current = armedAt;
+    if (!confirmed) {
+      speak("Say neuro forget all again within 5 seconds to delete every saved face.", 5, {});
+      return;
+    }
     clearAllFaces();
     speak("All faces cleared from memory.", 5, {});
   }, [clearAllFaces, speak]);

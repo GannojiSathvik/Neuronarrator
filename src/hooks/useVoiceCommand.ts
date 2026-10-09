@@ -3,7 +3,7 @@ import { useRef, useCallback, useEffect, useState } from "react";
 /**
  * Always-on voice command listener using the browser's free SpeechRecognition API.
  * Listens for "neuro remember [name]" wake phrase to register faces hands-free.
- * Also supports "neuro forget all" to clear faces.
+ * Also supports "neuro forget all" to clear faces (the caller asks for it twice before clearing).
  *
  * Robust matching handles common mis-transcriptions on mobile.
  */

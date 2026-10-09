@@ -1,9 +1,11 @@
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { User, UserX, Brain, Loader2, UserPlus, Trash2, Clock, Users, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { FaceMatch } from "@/hooks/useFaceRecognition";
 import { FaceMemoryContext } from './FaceMemoryContext';
+import { confirmStep, CONFIRM_WINDOW_MS } from "@/lib/confirmWindow";
 
 interface FaceRecognitionOverlayProps {
   isModelsLoaded: boolean;
@@ -34,6 +36,22 @@ export const FaceRecognitionOverlay = ({
   isVoiceListening = false,
   lastVoiceCommand,
 }: FaceRecognitionOverlayProps) => {
+  // Forgetting faces is irreversible: the first tap arms, a second tap within the window clears
+  const [clearArmedAt, setClearArmedAt] = useState<number | null>(null);
+
+  // Revert the armed button once the confirmation window passes
+  useEffect(() => {
+    if (clearArmedAt === null) return;
+    const timeout = window.setTimeout(() => setClearArmedAt(null), CONFIRM_WINDOW_MS);
+    return () => window.clearTimeout(timeout);
+  }, [clearArmedAt]);
+
+  const handleClearPress = () => {
+    const { confirmed, armedAt } = confirmStep(clearArmedAt, Date.now());
+    setClearArmedAt(armedAt);
+    if (confirmed) onClearFaces();
+  };
+
   if (!isVisible) return null;
 
   return (
@@ -192,15 +210,23 @@ export const FaceRecognitionOverlay = ({
             <Button
               variant="ghost"
               size="sm"
-              onClick={onClearFaces}
-              className="text-xs text-muted-foreground hover:text-ios-red"
+              onClick={handleClearPress}
+              className={cn(
+                "text-xs hover:text-ios-red",
+                clearArmedAt !== null ? "text-ios-red" : "text-muted-foreground"
+              )}
             >
               <Trash2 className="w-3 h-3 mr-1" />
-              Forget faces
+              {clearArmedAt !== null ? "Tap again to forget all faces" : "Forget faces"}
             </Button>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Kept mounted so screen readers announce the armed state when it appears */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {clearArmedAt !== null ? "Tap again within 5 seconds to forget all faces" : ""}
+      </p>
     </div>
   );
 };

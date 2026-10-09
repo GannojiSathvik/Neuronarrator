@@ -101,6 +101,36 @@ const Index = () => {
     }
   }, [isAutoCapturing, loadModels]);
 
+  // Kick the next capture
+  const triggerNextCapture = useCallback(() => {
+    speechStartedAtRef.current = 0;
+    if (isActiveRef.current && !isBusy()) {
+      setTimeout(() => {
+        if (isActiveRef.current && !isAnalyzingRef.current) {
+          setCaptureRequestId(prev => prev + 1);
+        }
+      }, 300);
+    }
+  }, [isBusy]);
+
+  const onSpeechEnd = useCallback(() => {
+    triggerNextCapture();
+  }, [triggerNextCapture]);
+
+  // A mode or finder-target change makes any in-flight capture stale: its result was asked
+  // for in the old mode and would talk over the mode confirmation. Abandon it, the same way
+  // the watchdog does, so the next capture starts in the new mode.
+  const isFirstModeRunRef = useRef(true);
+  useEffect(() => {
+    if (isFirstModeRunRef.current) {
+      isFirstModeRunRef.current = false;
+      return;
+    }
+    analysisCycleRef.current += 1;
+    isAnalyzingRef.current = false;
+    analysisStartedAtRef.current = 0;
+  }, [mode, targetItem]);
+
   // Voice command handler — truly hands-free
   const handleVoiceRemember = useCallback(async (name: string) => {
     console.log("[VoiceRemember] Command received for:", name);
@@ -155,17 +185,17 @@ const Index = () => {
     setCommandMode(newMode as CommandMode);
     if (newMode === "finder" && item) {
       setTargetItem(item);
-      speak(`Finder Mode. Looking for ${item}.`, 5, {});
+      speak(`Finder Mode. Looking for ${item}.`, 5, { onEnd: onSpeechEnd });
     } else if (newMode === "currency") {
-      speak("Currency Mode. Show me the notes.", 5, {});
+      speak("Currency Mode. Show me the notes.", 5, { onEnd: onSpeechEnd });
     } else {
-      speak("Standard Mode. Describing scene.", 5, {});
+      speak("Standard Mode. Describing scene.", 5, { onEnd: onSpeechEnd });
     }
     // Vibrate for confirmation
     if ("vibrate" in navigator) {
       try { navigator.vibrate([100, 50, 100]); } catch {}
     }
-  }, [setCommandMode, setTargetItem, speak]);
+  }, [setCommandMode, setTargetItem, speak, onSpeechEnd]);
 
   // Always-on voice command listener (active when scanning, paused during push-to-talk)
   const { isListening: isVoiceListening, lastCommand, forceRestart: forceRestartVoice } = useVoiceCommand({
@@ -174,22 +204,6 @@ const Index = () => {
     onModeSwitch: handleModeSwitch,
     enabled: isAutoCapturing && !isVoiceControlListening,
   });
-
-  // Kick the next capture
-  const triggerNextCapture = useCallback(() => {
-    speechStartedAtRef.current = 0;
-    if (isActiveRef.current && !isBusy()) {
-      setTimeout(() => {
-        if (isActiveRef.current && !isAnalyzingRef.current) {
-          setCaptureRequestId(prev => prev + 1);
-        }
-      }, 300);
-    }
-  }, [isBusy]);
-
-  const onSpeechEnd = useCallback(() => {
-    triggerNextCapture();
-  }, [triggerNextCapture]);
 
   // Watchdog
   useEffect(() => {
@@ -217,10 +231,12 @@ const Index = () => {
       if (isActiveRef.current && !isAnalyzingRef.current && !isBusy()) {
         console.log("Watchdog: forcing next capture");
         setCaptureRequestId(prev => prev + 1);
-      } else if (isActiveRef.current && isBusy() && speechStartedAtRef.current > 0) {
+      } else if (isActiveRef.current && isBusy() && !isSpeaking() && speechStartedAtRef.current > 0) {
+        // Only rescue a TTS request stuck loading. Audio that is actually playing has its own
+        // safety timer in useNeuroVoice, so a long description is allowed to finish.
         const elapsed = Date.now() - speechStartedAtRef.current;
         if (elapsed > 12000) {
-          console.warn("Watchdog: speech stuck for 12s+, forcing stop & next capture");
+          console.warn("Watchdog: speech stuck loading for 12s+, forcing stop & next capture");
           stop();
           speechStartedAtRef.current = 0;
           setCaptureRequestId(prev => prev + 1);
@@ -234,7 +250,7 @@ const Index = () => {
         watchdogTimerRef.current = null;
       }
     };
-  }, [isAutoCapturing, isBusy, stop]);
+  }, [isAutoCapturing, isBusy, isSpeaking, stop]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     if (isAnalyzingRef.current) return;
@@ -317,6 +333,8 @@ const Index = () => {
       // Handle finder mode feedback
       if (mode === "finder") {
         if (result.found) {
+          setAnalysisState("success");
+          setShowWarning(false);
           playFoundPing();
           // Also vibrate on found
           if ("vibrate" in navigator) {

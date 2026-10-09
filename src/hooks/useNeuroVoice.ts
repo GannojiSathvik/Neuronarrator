@@ -237,11 +237,13 @@ export const useNeuroVoice = () => {
         isPlayingRef.current = true;
         window.speechSynthesis.speak(utterance);
 
-        // Safety timer for browser TTS
+        // Safety timer for browser TTS, sized to the text. A fixed 7s cut off any
+        // description longer than ~17 words. Browser voices run ~12 chars/s at rate 1.
+        const estimatedMs = (text.length / 12) * 1000 / utterance.rate;
         safetyTimerRef.current = window.setTimeout(() => {
           console.warn("[TTS] Browser TTS safety timer fired");
           if (thisGen === speakGeneration) fireOnEnd();
-        }, 7000);
+        }, estimatedMs + 3000);
       } else {
         console.log("[TTS] No TTS available, firing onEnd immediately");
         fireOnEnd();

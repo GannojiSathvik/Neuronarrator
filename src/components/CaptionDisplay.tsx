@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { type VisionMode } from "@/services/vision";
+import { sanitizeCaption } from "@/lib/captionText";
 
 interface CaptionDisplayProps {
   text: string;
@@ -15,24 +16,6 @@ interface CaptionDisplayProps {
   // "corner": a small box in the bottom-right corner. "inline": no positioning of its own,
   // for when the parent places it beside a face.
   placement?: "corner" | "inline";
-}
-
-// Safety: if the AI returns raw JSON instead of a clean description, extract it
-function sanitizeCaption(raw: string): string {
-  if (!raw) return "";
-  if (raw.trim().startsWith("{") || raw.includes('"description"')) {
-    const cleaned = raw.replace(/<\|[^|]*\|>/g, "").replace(/\bassistant\b/g, "");
-    const match = cleaned.match(/"description"\s*:\s*"([^"]+)"/);
-    if (match) return match[1];
-    return raw
-      .replace(/[{}":[\]]/g, "")
-      .replace(/text_content|description|hazards|priority|found/g, "")
-      .replace(/<\|[^|]*\|>/g, "")
-      .replace(/\bassistant\b/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-  return raw;
 }
 
 export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general", announce = true, isError = false, placement = "corner" }: CaptionDisplayProps) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { placeBesideFace, videoBoxToScreen, SAFE_MARGIN } from "./facePlacement";
+import { facePanelWidth, mirrorBox, placeBesideFace, videoBoxToScreen, SAFE_MARGIN } from "./facePlacement";
 
 const overlaps = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
@@ -63,5 +63,57 @@ describe("placeBesideFace", () => {
     const phone = { width: 390, height: 844 };
     const placement = placeBesideFace(face, panel, phone);
     expect(placement.top + panel.height).toBeLessThanOrEqual(phone.height - SAFE_MARGIN.bottom);
+  });
+});
+
+describe("mirrorBox / mirrored mapping", () => {
+  it("flips x inside the video frame", () => {
+    expect(mirrorBox({ x: 100, y: 50, width: 200, height: 220 }, 1280)).toEqual({ x: 980, y: 50, width: 200, height: 220 });
+  });
+
+  it("is its own inverse", () => {
+    const box = { x: 123, y: 4, width: 56, height: 78 };
+    expect(mirrorBox(mirrorBox(box, 640), 640)).toEqual(box);
+  });
+
+  it("puts a face on the left of the raw frame on the right of a mirrored screen", () => {
+    const video = { width: 1280, height: 720 };
+    const screen = { width: 1280, height: 720 };
+    const box = { x: 100, y: 200, width: 200, height: 200 };
+    expect(videoBoxToScreen(box, video, screen, false).x).toBe(100);
+    expect(videoBoxToScreen(box, video, screen, true).x).toBe(980);
+  });
+
+  it("mirrors before the cover crop, so a centred face stays centred", () => {
+    const video = { width: 1280, height: 720 };
+    const phone = { width: 390, height: 844 };
+    const centred = { x: 590, y: 310, width: 100, height: 100 };
+    const plain = videoBoxToScreen(centred, video, phone, false);
+    const mirrored = videoBoxToScreen(centred, video, phone, true);
+    expect(mirrored.x).toBeCloseTo(plain.x);
+    expect(mirrored.width).toBeCloseTo(plain.width);
+  });
+
+  it("mirrors an off-centre face around the screen centre after cropping", () => {
+    const video = { width: 1280, height: 720 };
+    const phone = { width: 390, height: 844 };
+    const box = { x: 500, y: 300, width: 100, height: 100 };
+    const plain = videoBoxToScreen(box, video, phone, false);
+    const mirrored = videoBoxToScreen(box, video, phone, true);
+    // The two boxes are reflections of each other around the screen's vertical centre line
+    expect(plain.x + plain.width / 2 + (mirrored.x + mirrored.width / 2)).toBeCloseTo(phone.width);
+    expect(mirrored.y).toBeCloseTo(plain.y);
+  });
+});
+
+describe("facePanelWidth", () => {
+  it("is about 45% of a wide screen, capped", () => {
+    expect(facePanelWidth({ width: 800, height: 600 })).toBeCloseTo(360);
+    expect(facePanelWidth({ width: 1920, height: 1080 })).toBe(440);
+  });
+
+  it("never goes below the minimum or past the safe area", () => {
+    expect(facePanelWidth({ width: 390, height: 844 })).toBe(260);
+    expect(facePanelWidth({ width: 240, height: 500 })).toBe(240 - SAFE_MARGIN.side * 2);
   });
 });

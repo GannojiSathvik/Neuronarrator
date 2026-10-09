@@ -107,6 +107,7 @@ const Index = () => {
   // Voice control for mode switching (push-to-talk)
   const {
     isListening: isVoiceControlListening,
+    isTranscribing: isVoiceControlTranscribing,
     transcript: voiceTranscript,
     commandMode,
     targetItem,
@@ -847,6 +848,7 @@ const Index = () => {
       {/* Push-to-Talk Overlay — full screen touch target */}
       <PushToTalkOverlay
         isListening={isVoiceControlListening}
+        isTranscribing={isVoiceControlTranscribing}
         isActive={isAutoCapturing}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}

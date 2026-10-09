@@ -63,7 +63,7 @@ There is no server-side database and no user login. Everything the app remembers
 | Browser APIs | Web Speech API (recognition), Web Audio API (tones, TTS playback), Vibration API, IndexedDB |
 | On-device ML | face-api.js (SSD MobileNet v1 + TinyFaceDetector, 68-point landmarks, 128-d face descriptors); Dexie for storage |
 | Backend | Supabase Edge Functions (Deno), hosted on Lovable Cloud |
-| Vision models | Groq `qwen/qwen3.8-27b`; Google `gemini-3.8-flash` (fallback, override with `GEMINI_MODEL`); Anthropic `claude-opus-5-5` (fallback); Lovable gateway `google/gemini-2.5-flash` (legacy, Lovable Cloud only) |
+| Vision models | Groq `qwen/qwen3.8-27b`; Google `gemini-3.5-flash` (fallback, override with `GEMINI_MODEL`); Anthropic `claude-opus-5-5` (fallback); Lovable gateway `google/gemini-2.5-flash` (legacy, Lovable Cloud only) |
 | Speech | Sarvam AI `bulbul:v2` (TTS); Groq `whisper-large-v3-turbo` (STT, override with `STT_MODEL`), Sarvam `saarika:v2.5` as STT fallback |
 | Testing | Vitest, Testing Library, jsdom |
 

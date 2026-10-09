@@ -46,7 +46,7 @@ You need **at least one** of `GROQ_API_KEY`, `GEMINI_API_KEY` or `ANTHROPIC_API_
 | `SARVAM_API_KEY` | text-to-speech; speech-to-text when there is no Groq key or Groq fails | optional; without it the app uses browser speech |
 | `LOVABLE_API_KEY` | analyze-image (last, legacy) | skip it, because it only works on Lovable Cloud |
 
-Optional overrides, not set by the wizard: `GEMINI_MODEL` (default `gemini-3.8-flash`) and `STT_MODEL` (default `whisper-large-v3-turbo`). Set them with `npx supabase secrets set NAME=value --project-ref <ref>`.
+Optional overrides, not set by the wizard: `GEMINI_MODEL` (default `gemini-3.5-flash`; 3.8 was overloaded and 3.7 timed out in a 9 Oct 2026 test) and `STT_MODEL` (default `whisper-large-v3-turbo`). Set them with `npx supabase secrets set NAME=value --project-ref <ref>`.
 
 ## How your keys are protected
 

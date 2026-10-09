@@ -31,9 +31,9 @@ const VISION_MODELS = [
 // Each one is tried only if its key is set and the earlier ones failed or aren't configured.
 
 // Gemini Flash models are free of charge on the Gemini API free tier (free-tier content may be
-// used by Google to improve its products). Override with the GEMINI_MODEL secret.
+// used by Google to improve its products). Override with the GEMINI_MODEL secret. 3.5 Flash answered in ~10 s on 9 Oct 2026, while 3.8 was overloaded (503) and 3.7 timed out.
 // https://ai.google.dev/gemini-api/docs/models
-const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 
 // Used only when Groq and Gemini fail or aren't configured.
 const CLAUDE_MODEL = "claude-opus-5-5";

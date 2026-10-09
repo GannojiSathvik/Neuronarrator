@@ -72,6 +72,16 @@ describe("local memory persistence", () => {
     expect((await db.memories.get(id))?.personId).toBe(first);
   });
 
+  it("finds a person's most recent note by date, ignoring other people", async () => {
+    const first = await repository.addPerson("Arjun", "Friend");
+    const second = await repository.addPerson("Meera", "Family");
+    expect(await repository.latestMemory(first)).toBeUndefined();
+    await repository.saveMemory({ ...input(first, "Newest"), occurredAt: new Date("2021-06-01") });
+    await repository.saveMemory({ ...input(first, "Oldest"), occurredAt: new Date("2019-01-01") });
+    await repository.saveMemory({ ...input(second, "Other person"), occurredAt: new Date("2022-01-01") });
+    expect((await repository.latestMemory(first))?.title).toBe("Newest");
+  });
+
   it("deletes only the selected person and their notes", async () => {
     const first = await repository.addPerson("Arjun", "Friend");
     const second = await repository.addPerson("Meera", "Family");

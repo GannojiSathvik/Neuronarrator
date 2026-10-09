@@ -103,3 +103,14 @@ export function validateMemory(
     );
   }
 }
+
+// Abbreviations whose period doesn't end a sentence ("Dr. Rao said…").
+const FIRST_SENTENCE = /^.*?(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr))[.!?](?=\s|$)/;
+
+/** The spoken reminder for a familiar face: the note's first sentence, in the user's own words. */
+export function lastTimeSentence(body: string, limit = 120): string {
+  const text = body.replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const excerpt = memoryExcerpt(text.match(FIRST_SENTENCE)?.[0] ?? text, limit);
+  return `Last time: ${/[.!?…]$/.test(excerpt) ? excerpt : `${excerpt}.`}`;
+}

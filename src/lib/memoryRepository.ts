@@ -1,3 +1,4 @@
+import Dexie from "dexie";
 import {
   db,
   faceDB,
@@ -48,6 +49,13 @@ export const memoryRepository = {
   },
 
   deleteMemory: (id: number) => db.memories.delete(id),
+
+  /** One person's most recent note, read from the [personId+occurredAt] index (not the library). */
+  latestMemory: (personId: number): Promise<ConversationMemory | undefined> =>
+    db.memories
+      .where("[personId+occurredAt]")
+      .between([personId, Dexie.minKey], [personId, Dexie.maxKey])
+      .last(),
   deletePerson: faceDB.deleteFace,
 
   async seedSampleStory(): Promise<number> {

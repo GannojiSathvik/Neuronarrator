@@ -175,7 +175,7 @@ export const AddPersonModal = ({
                 : "Tap mic & say the name"}
             </p>
             {voiceError && (
-              <p className="text-xs text-ios-red text-center">{voiceError}</p>
+              <p role="alert" className="text-xs text-ios-red text-center">{voiceError}</p>
             )}
           </div>}
 

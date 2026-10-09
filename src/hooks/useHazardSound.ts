@@ -86,5 +86,11 @@
      // Priority 1-5: No sound
    }, [playCautionSound, playDangerSound]);
  
-   return { playHazardSound };
+   // Call from a tap handler: iOS only lets an AudioContext start inside a user gesture, and
+   // hazard sounds otherwise first play from the async analysis loop, where it stays suspended.
+   const unlock = useCallback(() => {
+     getAudioContext();
+   }, [getAudioContext]);
+ 
+   return { playHazardSound, unlock };
  };

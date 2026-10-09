@@ -54,9 +54,13 @@ export const PushToTalkOverlay = ({
     if (isActive) onTouchEnd();
   };
 
-  // Screen readers activate with a synthetic click (detail === 0) rather than touch/mouse events
+  // Screen readers activate with a synthetic click (detail === 0) rather than touch/mouse events,
+  // and cannot press-and-hold. Start the app, then toggle listening on each activation.
   const handleClick = (e: React.MouseEvent) => {
-    if (e.detail === 0 && !isActive) onStartStream();
+    if (e.detail !== 0) return;
+    if (!isActive) onStartStream();
+    else if (isListening) onTouchEnd();
+    else onTouchStart();
   };
 
   return (

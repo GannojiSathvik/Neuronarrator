@@ -194,8 +194,9 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onStopComma
             }
           }
 
-          // Check for "neuro forget all"
-          for (const pattern of CLEAR_PATTERNS) {
+          // Check for "neuro forget all". Deleting every saved face is destructive, so only
+          // act on the recognizer's top guess, never a lower-ranked alternative.
+          for (const pattern of j === 0 ? CLEAR_PATTERNS : []) {
             if (transcript.includes(pattern)) {
               console.log("[VoiceCmd] ✅ FORGET ALL command detected");
               setLastCommand("Forget all faces");

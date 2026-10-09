@@ -29,8 +29,7 @@ const REMEMBER_PATTERNS = [
   "mirror remember",
   "nero member",
   "nero number",
-  "your remember",
-  "you remember",
+  // Not "you remember" / "your remember": ordinary speech ("do you remember John") opened face saving
   "euro remember",
 ];
 

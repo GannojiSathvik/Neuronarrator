@@ -1,35 +1,38 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { placeBesideFace, type Rect, type Size } from "@/lib/facePlacement";
+import type { PanelPlacement } from "@/lib/facePlacement";
 
 interface FaceAnchoredPanelProps {
-  /** The face in SCREEN pixels (map video boxes with videoBoxToScreen first). */
-  faceBox: Rect;
-  screen: Size;
+  /** Where to draw it, from placeFacePanels (beside its face, clear of the other panels). */
+  placement: Pick<PanelPlacement, "left" | "top">;
   width: number;
+  /** Reports the panel's height, which the layout needs to keep panels apart and on screen. */
+  onHeight: (height: number) => void;
   children: ReactNode;
 }
 
 /**
  * A panel that follows a face and sits beside it (right, then left, then below or above),
- * like a name tag in AR, so it never covers the person you're looking at. Fades in and out
- * when used inside AnimatePresence.
+ * like a name tag in AR, so it never covers the person you're looking at. The parent works out
+ * where every face's panel goes at once so they can't overlap. Fades in and out when used
+ * inside AnimatePresence.
  */
-export function FaceAnchoredPanel({ faceBox, screen, width, children }: FaceAnchoredPanelProps) {
+export function FaceAnchoredPanel({ placement, width, onHeight, children }: FaceAnchoredPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const [panelHeight, setPanelHeight] = useState(120);
   const reduceMotion = useReducedMotion();
+  const onHeightRef = useRef(onHeight);
+  onHeightRef.current = onHeight;
 
   // The height changes as the memory types out; measure it so the panel is kept on screen.
   useLayoutEffect(() => {
     const element = panelRef.current;
     if (!element) return;
-    const observer = new ResizeObserver(() => setPanelHeight(element.offsetHeight));
+    const observer = new ResizeObserver(() => onHeightRef.current(element.offsetHeight));
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
 
-  const { left, top } = placeBesideFace(faceBox, { width, height: panelHeight }, screen);
+  const { left, top } = placement;
   // A soft spring glides the panel between tracker updates (4 a second) instead of jumping.
   const follow = reduceMotion ? { duration: 0 } : { type: "spring" as const, stiffness: 140, damping: 22, mass: 0.9 };
 

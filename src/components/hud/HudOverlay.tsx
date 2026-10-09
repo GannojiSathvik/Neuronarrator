@@ -1,8 +1,8 @@
-import type { ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { AnimatePresence } from "framer-motion";
 import { FaceAnchoredPanel } from "@/components/FaceAnchoredPanel";
 import { useHeldFaces } from "@/hooks/useHeldFaces";
-import { facePanelWidth, type Size } from "@/lib/facePlacement";
+import { facePanelWidth, placeFacePanels, type Size } from "@/lib/facePlacement";
 import type { HudState } from "@/lib/hudState";
 import type { VisionMode } from "@/services/vision";
 import { AppLogo } from "./AppLogo";
@@ -34,6 +34,17 @@ interface HudOverlayProps {
 export function HudOverlay({ hud, screen, active, processing, announce, mode, priority, onAddPerson, topRight, intro, controls }: HudOverlayProps) {
   const faces = useHeldFaces(hud.faces);
   const panelWidth = facePanelWidth(screen);
+  // Each panel's measured height (until measured, a typical tag-plus-card height). All panels
+  // are placed together so two people's tags never land on top of each other.
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const reportHeight = useCallback((id: string, height: number) => {
+    setHeights((previous) => (previous[id] === height ? previous : { ...previous, [id]: height }));
+  }, []);
+  const placements = placeFacePanels(
+    faces.map((face) => ({ id: face.id, face: face.screenBox, height: heights[face.id] ?? 120 })),
+    panelWidth,
+    screen,
+  );
 
   return (
     <>
@@ -41,7 +52,12 @@ export function HudOverlay({ hud, screen, active, processing, announce, mode, pr
 
       <AnimatePresence>
         {faces.map((face) => (
-          <FaceAnchoredPanel key={face.id} faceBox={face.screenBox} screen={screen} width={panelWidth}>
+          <FaceAnchoredPanel
+            key={face.id}
+            placement={placements[face.id]}
+            width={panelWidth}
+            onHeight={(height) => reportHeight(face.id, height)}
+          >
             <FaceTag face={face} announce={announce} onAddPerson={onAddPerson} />
           </FaceAnchoredPanel>
         ))}

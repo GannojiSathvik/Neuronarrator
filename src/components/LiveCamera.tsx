@@ -57,8 +57,10 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
     isMirrored: () => mirrored,
   }), [mirrored]);
  
-  const captureFrame = useCallback(async () => {
-    if (isCapturingRef.current) return;
+  // The smart loop passes allowOverlap: the page decides whether a new capture may replace one
+  // still in flight (a second Describe tap does), and ignores the abandoned one's late result.
+  const captureFrame = useCallback(async (allowOverlap = false) => {
+    if (isCapturingRef.current && !allowOverlap) return;
     if (webcamRef.current) {
       const screenshot = webcamRef.current.getScreenshot();
       if (screenshot) {
@@ -90,11 +92,10 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   useEffect(() => {
     if (
       isAutoCapturing && smartLoopEnabled &&
-      captureRequestId > lastCaptureRequestIdRef.current &&
-      !isCapturingRef.current
+      captureRequestId > lastCaptureRequestIdRef.current
     ) {
       lastCaptureRequestIdRef.current = captureRequestId;
-      captureFrame();
+      captureFrame(true);
     }
   }, [isAutoCapturing, smartLoopEnabled, captureRequestId, captureFrame]);
 

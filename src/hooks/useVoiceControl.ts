@@ -182,6 +182,12 @@ export function isExactCommand(segments: RecognitionSegment[]): boolean {
   return EXACT_COMMANDS.has(normalizeTranscript(top).replace(/^neuro\s+/, ""));
 }
 
+/** What was heard, trimmed for speaking back: at most 8 words. */
+export function heardForEcho(text: string): string {
+  const words = text.replace(/[^\p{L}\p{N}'\s]/gu, " ").trim().split(/\s+/).filter(Boolean);
+  return words.length > 8 ? `${words.slice(0, 8).join(" ")}…` : words.join(" ");
+}
+
 /** The short spoken echo of what was understood, so a misheard command is noticed. */
 function modeEcho(mode: CommandMode, item: string): string {
   if (mode === "currency") return "Currency. Show me the notes.";
@@ -224,7 +230,9 @@ export function useVoiceControl(): UseVoiceControlReturn {
       setTargetItem(parsed.targetItem);
     } else {
       console.log("[VoiceControl] No command recognized in:", text);
-      speakFeedback("Sorry, I didn't understand. Try saying: count notes, find keys, read this, or describe.");
+      // Say what was heard, so the user can tell a mishearing ("I heard: fine my kiss") from a
+      // phrase that simply isn't a command.
+      speakFeedback(`I heard: ${heardForEcho(text)}. Try saying: find my keys, read this, count notes, or describe.`);
     }
   }, []);
 

@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isExactCommand, parseCommand, pickCommand, useVoiceControl } from "./useVoiceControl";
+import { isExactCommand, parseCommand, pickCommand, useVoiceControl, heardForEcho } from "./useVoiceControl";
 import { pickRecorderMimeType, startClipRecorder } from "@/lib/pushToTalkAudio";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -486,5 +486,17 @@ describe("push-to-talk server speech-to-text", () => {
     expect(pickRecorderMimeType()).toBe("audio/mp4");
     FakeMediaRecorder.supported = [];
     expect(pickRecorderMimeType()).toBeUndefined();
+  });
+});
+
+describe("heardForEcho", () => {
+  it("speaks back what was heard, without punctuation", () => {
+    expect(heardForEcho("Fine, my kiss!")).toBe("Fine my kiss");
+  });
+
+  it("trims long transcripts to 8 words", () => {
+    expect(heardForEcho("one two three four five six seven eight nine ten")).toBe(
+      "one two three four five six seven eight…",
+    );
   });
 });

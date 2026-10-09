@@ -212,7 +212,15 @@ const Index = () => {
   // One capture the user asked for. Dropped while a capture or speech is in progress — the
   // callers that run after speech (e.g. a mode confirmation's onEnd) ask again once it ends.
   const requestCapture = useCallback(() => {
-    if (!isActiveRef.current || modalOpenRef.current || isAnalyzingRef.current || isBusy()) return;
+    if (!isActiveRef.current || modalOpenRef.current) return;
+    // The newest request wins: abandon one still in flight (its late result is discarded by the
+    // cycle id) instead of ignoring the user's second tap.
+    if (isAnalyzingRef.current) {
+      analysisCycleRef.current += 1;
+      isAnalyzingRef.current = false;
+      analysisStartedAtRef.current = 0;
+    }
+    if (isBusy()) return;
     requestedCaptureRef.current = true;
     speechStartedAtRef.current = 0;
     setCaptureRequestId(prev => prev + 1);
@@ -946,7 +954,7 @@ const Index = () => {
             onMicStart={handleTouchStart}
             onMicEnd={handleTouchEnd}
             showDescribeNow={isAutoCapturing && !autoDescribe}
-            describeDisabled={analysisState === "analyzing"}
+            describeDisabled={false}
             onDescribeNow={handleDescribeNow}
           />
         }

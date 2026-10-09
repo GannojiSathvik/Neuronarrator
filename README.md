@@ -154,8 +154,3 @@ The tests cover push-to-talk command parsing, the hands-free "Neuro read" matche
 - Speech goes through Sarvam text-to-speech, which cuts text at 500 characters, so a long page in Read mode is only partly read aloud. The full text is still shown on screen.
 - `npm run lint` still reports issues in the original code (mostly `any` types and empty `catch` blocks).
 
-## Credits
-
-- **Concept:** Gannoji Sathvik came up with the NeuroNarrator idea.
-- **Original implementation:** G. Ronit Reddy ([Ronitreddy10/neuronarrator](https://github.com/Ronitreddy10/neuronarrator)). The app was built with Lovable, and most commits in that history were made by Lovable's bot.
-- **Later changes in this repository** (Gannoji Sathvik, with Claude as a coding assistant): fixed the lockfile so `npm ci` works, fixed saving a face from the "Neuro remember" voice command, made the camera and face-panel buttons clickable above the push-to-talk overlay, added Claude as a vision fallback, added direct Gemini and Groq Whisper providers so the backend runs on your own keys, added input validation to the edge functions, and added unit tests.

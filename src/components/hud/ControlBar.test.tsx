@@ -6,8 +6,6 @@ const setup = (overrides: Partial<Parameters<typeof ControlBar>[0]> = {}) => {
   const props = {
     isActive: true,
     onStartStop: vi.fn(),
-    mode: "standard" as const,
-    onModeSelect: vi.fn(),
     targetItem: "",
     isListening: false,
     isTranscribing: false,
@@ -46,13 +44,6 @@ describe("ControlBar", () => {
     setup({ isActive: false });
     expect(screen.getByRole("button", { name: "Hold to speak a command" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Start camera and narration" })).toBeInTheDocument();
-  });
-
-  it("marks the current mode and switches on click", () => {
-    const props = setup({ mode: "reader" });
-    expect(screen.getByRole("button", { name: /^Read mode/ })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: /^Money mode/ }));
-    expect(props.onModeSelect).toHaveBeenCalledWith("currency");
   });
 
   it("shows Describe now only in manual mode", () => {

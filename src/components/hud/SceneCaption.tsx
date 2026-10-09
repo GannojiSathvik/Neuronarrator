@@ -74,13 +74,13 @@ export const SceneCaption = ({ text, textContent, isVisible, priority = 0, mode 
                   toggleExpanded(event);
                 }
               }}
-              className="pointer-events-auto w-full max-w-2xl cursor-pointer rounded-2xl bg-black/65 px-4 py-3 text-center shadow-lg backdrop-blur-md max-h-[40vh] overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              className="pointer-events-auto w-full max-w-xl cursor-pointer rounded-xl bg-black/50 px-4 py-2 text-center backdrop-blur-md max-h-[40vh] overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
             >
               {hasDescription && (
                 <p
                   className={cn(
                     "font-medium leading-snug text-white",
-                    isReader ? "text-[1rem] text-white/85" : "text-[1.125rem] sm:text-[1.25rem]",
+                    isReader ? "text-[0.8125rem] text-white/80" : "text-[0.9375rem]",
                     priority > 7 && "text-red-200",
                     !expanded && (isReader ? "line-clamp-2" : "line-clamp-3"),
                   )}
@@ -94,11 +94,11 @@ export const SceneCaption = ({ text, textContent, isVisible, priority = 0, mode 
                 <p
                   className={cn(
                     "whitespace-pre-wrap leading-snug text-white",
-                    isReader ? "mt-1 text-[1.25rem] font-semibold" : "mt-2 border-t border-white/20 pt-2 text-[1.125rem] text-white/90",
+                    isReader ? "mt-1 text-[1rem] font-medium" : "mt-1.5 border-t border-white/15 pt-1.5 text-[0.875rem] text-white/85",
                     !expanded && (isReader ? "line-clamp-6" : "line-clamp-2"),
                   )}
                 >
-                  {!isReader && <span className="mr-2 text-[0.875rem] font-semibold uppercase tracking-wider text-sky-300">Text:</span>}
+                  {!isReader && <span className="mr-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-sky-300">Text:</span>}
                   {textContent}
                 </p>
               )}

@@ -883,17 +883,6 @@ const Index = () => {
     requestCapture();
   };
 
-  // The mode buttons do what the hands-free mode commands do. Find needs an item, which is set
-  // by voice ("find my keys"); without one, explain how instead of searching for nothing.
-  const handleModeSelect = (next: CommandMode) => {
-    if (next === "finder" && !targetItem) {
-      speak("To find something, hold the microphone and say find, then the item. For example, find my keys.", 5, {});
-      return;
-    }
-    if (next === commandMode) return;
-    handleModeSwitch(next, next === "finder" ? targetItem : undefined);
-  };
-
   const handleAddPerson = () => { setRequestedName(''); setLinkToPerson(true); setAddPersonOpen(true); stop(); };
 
   // One view-model for the HUD, from the demo timeline or from real data (see src/lib/hudState).
@@ -1006,9 +995,6 @@ const Index = () => {
           <ControlBar
             isActive={isAutoCapturing}
             onStartStop={toggleAutoCapture}
-            mode={commandMode}
-            onModeSelect={handleModeSelect}
-            targetItem={targetItem}
             isListening={isVoiceControlListening}
             isTranscribing={isVoiceControlTranscribing}
             onMicStart={handleTouchStart}

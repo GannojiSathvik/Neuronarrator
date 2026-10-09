@@ -7,7 +7,7 @@ export function AppLogo() {
       to="/"
       aria-label="NeuroNarrator: open Memory space"
       title="Memory space"
-      className="pointer-events-auto flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/20 bg-black/75 text-[1.375rem] font-bold text-white shadow-lg backdrop-blur-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+      className="pointer-events-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 bg-black/75 text-[0.875rem] font-bold text-white shadow-lg backdrop-blur-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
     >
       N
     </Link>

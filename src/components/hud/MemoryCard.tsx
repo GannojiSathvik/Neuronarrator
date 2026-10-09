@@ -19,13 +19,13 @@ export function MemoryCard({ text, announce, delayMs = 200 }: MemoryCardProps) {
     <div
       aria-live={announce ? "polite" : "off"}
       aria-atomic="true"
-      className="max-w-full rounded-2xl border border-white/25 bg-white/20 px-4 py-3 shadow-lg backdrop-blur-md"
+      className="max-w-full rounded-xl border border-white/20 bg-white/15 px-4 py-3 shadow backdrop-blur-md"
     >
       {/* Screen readers get the whole note at once, not each typed letter */}
       <p className="sr-only">{text}</p>
       <p
         aria-hidden="true"
-        className="min-h-[1.5em] text-[1.125rem] font-medium leading-snug text-white [text-shadow:0_1px_3px_rgb(0_0_0/0.65)] sm:text-[1.25rem]"
+        className="min-h-[1.5em] text-[0.9375rem] font-normal leading-relaxed text-white/95 [text-shadow:0_1px_2px_rgb(0_0_0/0.55)]"
       >
         {shown}
       </p>

@@ -28,18 +28,18 @@ export function FaceTag({ face, announce, onAddPerson }: FaceTagProps) {
       >
         {known ? (
           <>
-            <span className="max-w-full truncate rounded-lg bg-hud-name px-3 py-1 text-[1.75rem] font-bold leading-tight text-white shadow-md sm:text-[2rem]">
+            <span className="max-w-full truncate rounded-md bg-hud-name/90 px-3 py-1 text-[1.375rem] font-bold leading-tight text-white shadow">
               {face.name}
             </span>
             {face.relation && (
-              <span className="rounded-lg bg-hud-relation px-2.5 py-1 text-[1.125rem] font-semibold leading-tight text-white shadow-md">
+              <span className="rounded-md bg-hud-relation/90 px-2 py-0.5 text-[0.8125rem] font-semibold leading-tight text-white shadow">
                 {face.relation}
               </span>
             )}
           </>
         ) : (
           <>
-            <span className="rounded-lg bg-hud-unknown px-3 py-1 text-[1.5rem] font-bold leading-tight text-white shadow-md">
+            <span className="rounded-md bg-hud-unknown/90 px-3 py-1 text-[1.125rem] font-semibold leading-tight text-white shadow">
               Unknown
             </span>
             {face.canEnroll && (
@@ -52,10 +52,10 @@ export function FaceTag({ face, announce, onAddPerson }: FaceTagProps) {
                 // The full-screen push-to-talk layer is underneath; don't let a press reach it
                 onTouchStart={(event) => event.stopPropagation()}
                 onMouseDown={(event) => event.stopPropagation()}
-                className="pointer-events-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-white px-3 text-[1.125rem] font-semibold text-black shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                className="pointer-events-auto inline-flex min-h-7 items-center gap-1 rounded-md bg-white/90 px-2 text-[0.8125rem] font-semibold text-black shadow focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
                 aria-label="Add: save this person's face"
               >
-                <UserPlus className="h-5 w-5" aria-hidden="true" />
+                <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
                 Add
               </button>
             )}
@@ -67,7 +67,7 @@ export function FaceTag({ face, announce, onAddPerson }: FaceTagProps) {
         (face.memory ? (
           <MemoryCard key={face.memory} text={face.memory} announce={announce} />
         ) : (
-          <p className="text-[1.125rem] text-white/80 [text-shadow:0_1px_3px_rgb(0_0_0/0.8)]">No saved memories yet</p>
+          <p className="text-[0.8125rem] text-white/75 [text-shadow:0_1px_3px_rgb(0_0_0/0.8)]">No saved memories yet</p>
         ))}
     </>
   );

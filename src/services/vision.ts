@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { FunctionsHttpError } from "@supabase/supabase-js";
 import { z } from "zod";
+import { capPersonNotes, type PersonNotes } from "@/lib/memory";
 
 const visionResponseSchema = z.object({
   text_content: z.string().max(10_000).default(""),
@@ -33,6 +34,14 @@ export interface KnownFaceInfo {
   isLongAbsence?: boolean;
 }
 
+/** Memory sent with a spoken question: what happened recently, and saved notes about the people. */
+export interface QuestionMemory {
+  /** Working-memory summary, newest first (sent only with a question, at most 1000 chars). */
+  recentContext?: string;
+  /** Relevant saved notes per recognised person (at most 1200 chars in total). */
+  personNotes?: PersonNotes[];
+}
+
 export async function analyzeImage(
   base64Image: string,
   mode: VisionMode = "general",
@@ -40,6 +49,7 @@ export async function analyzeImage(
   previousDescription: string = "",
   targetItem: string = "",
   question: string = "",
+  { recentContext = "", personNotes = [] }: QuestionMemory = {},
 ): Promise<VisionResponse> {
   const { data, error } = await supabase.functions.invoke("analyze-image", {
     body: {
@@ -50,6 +60,9 @@ export async function analyzeImage(
       targetItem,
       // A spoken question, answered about this frame instead of the mode's usual task
       ...(question ? { question: question.slice(0, 300) } : {}),
+      // Memory only helps answer a question; the capture loop doesn't send it
+      ...(question && recentContext ? { recentContext: recentContext.slice(0, 1000) } : {}),
+      ...(question && personNotes.length ? { personNotes: capPersonNotes(personNotes) } : {}),
     },
     // Longer than analyze-image's 13s server budget (so a late fallback answer still arrives)
     // but shorter than the 15s watchdog, so a hung request can't lock the capture guard.

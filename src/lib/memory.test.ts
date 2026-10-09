@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  capPersonNotes,
+  isTimelineMemory,
   lastTimeSentence,
+  peopleNamedIn,
+  personNotesLength,
+  selectPersonNotes,
+  sightingDue,
+  SIGHTING_INTERVAL_MS,
   memoryExcerpt,
   searchMemories,
   tokenize,
@@ -120,5 +127,70 @@ describe("lastTimeSentence", () => {
 
   it("says nothing for an empty note", () => {
     expect(lastTimeSentence("   ")).toBe("");
+  });
+});
+
+describe("notes for a spoken question", () => {
+  const memories = [
+    { ...note(1, 1, "Arjun recommended The Alchemist and offered his copy.", "2026-09-01"), title: "Book" },
+    { ...note(2, 1, "We walked by the lake.", "2026-09-20"), title: "Walk" },
+    { ...note(3, 1, "Coffee at the park café.", "2026-10-01"), title: "Coffee" },
+    { ...note(4, 2, "Meera's book club meets on Friday.", "2026-10-02"), title: "Club" },
+    { ...note(5, 1, "Seen at 9:05 AM on 3 Oct 2026.", "2026-10-03"), title: "Seen", source: "sighting" as const },
+  ];
+
+  it("returns the person's BM25 matches, dated and in their own words", () => {
+    expect(selectPersonNotes(memories, 1, "what book did he recommend?")).toEqual([
+      "1 Sept 2026 — Book: Arjun recommended The Alchemist and offered his copy.",
+      "Last recorded sighting: Seen at 9:05 AM on 3 Oct 2026.",
+    ]);
+  });
+
+  it("falls back to the newest two written notes when nothing matches", () => {
+    expect(selectPersonNotes(memories, 1, "what did we talk about?")).toEqual([
+      "1 Oct 2026 — Coffee: Coffee at the park café.",
+      "20 Sept 2026 — Walk: We walked by the lake.",
+      "Last recorded sighting: Seen at 9:05 AM on 3 Oct 2026.",
+    ]);
+  });
+
+  it("keeps at most three matches", () => {
+    const many = [1, 2, 3, 4, 5].map((id) => note(id, 1, `The book number ${id}.`));
+    expect(selectPersonNotes(many, 1, "book")).toHaveLength(3);
+  });
+
+  it("caps the total size, clipping the note that doesn't fit", () => {
+    const people = [
+      { name: "Arjun", notes: ["a ".repeat(200).trim(), "b ".repeat(200).trim()] },
+      { name: "Meera", notes: ["c ".repeat(300).trim()] },
+    ];
+    const capped = capPersonNotes(people, 1200);
+    expect(personNotesLength(capped)).toBeLessThanOrEqual(1200);
+    expect(capped.map((person) => person.name)).toEqual(["Arjun", "Meera"]);
+    expect(capped[1].notes[0].endsWith("…")).toBe(true);
+    expect(capPersonNotes(people, 30)).toEqual([]);
+  });
+
+  it("finds people named in the question", () => {
+    const people = [
+      { id: 1, name: "Arjun Mehta" },
+      { id: 2, name: "Meera Rao" },
+      { id: 3, name: "Al" },
+    ];
+    expect(peopleNamedIn("What book did Arjun recommend?", people).map((p) => p.id)).toEqual([1]);
+    expect(peopleNamedIn("Is it all right?", people)).toEqual([]);
+  });
+});
+
+describe("sightings", () => {
+  it("are kept out of the timeline", () => {
+    expect(isTimelineMemory(note(1, 1, "x"))).toBe(true);
+    expect(isTimelineMemory({ ...note(1, 1, "x"), source: "sighting" })).toBe(false);
+  });
+
+  it("are logged at most once per interval", () => {
+    expect(sightingDue(undefined, 0)).toBe(true);
+    expect(sightingDue(1_000, 1_000 + SIGHTING_INTERVAL_MS - 1)).toBe(false);
+    expect(sightingDue(1_000, 1_000 + SIGHTING_INTERVAL_MS)).toBe(true);
   });
 });

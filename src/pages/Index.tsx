@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useReducer } from "react";
 import { useSearchParams } from 'react-router-dom';
 import { useMemoryLibrary } from '@/hooks/useMemoryLibrary';
+import { useWorkingMemory } from '@/hooks/useWorkingMemory';
 import { LiveCamera, type LiveCameraRef } from "@/components/LiveCamera";
 import { SettingsModal } from "@/components/SettingsModal";
 import { type RelationType } from "@/lib/faceDatabase";
@@ -29,7 +30,7 @@ import { confirmStep } from "@/lib/confirmWindow";
 import { shouldSkipRepeat, type SpokenMemory } from "@/lib/novelty";
 import { readAutoDescribe, shouldAutoContinue, writeAutoDescribe } from "@/lib/autoDescribe";
 import { memoryRepository } from "@/lib/memoryRepository";
-import { lastTimeSentence, memoryExcerpt } from "@/lib/memory";
+import { lastTimeSentence, memoryExcerpt, peopleNamedIn } from "@/lib/memory";
 import { buildHudFromDemo, buildHudFromReal, hazardBannerText, type HudHazard, type HudState } from "@/lib/hudState";
 import { connectionReducer, INITIAL_CONNECTION, isConnected } from "@/lib/connectionStatus";
 import { DEMO_CAPTIONS, readDemoMode, writeDemoMode } from "@/lib/demoSchedule";
@@ -41,6 +42,8 @@ type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 const Index = () => {
   const [params, setParams] = useSearchParams();
   const { people, memories } = useMemoryLibrary();
+  // Short-term memory of the last few minutes, used to answer spoken questions
+  const workingMemory = useWorkingMemory();
   const enrollmentPerson = people.find(person => person.id === Number(params.get('person')) && !person.isSample);
   const [requestedName, setRequestedName] = useState('');
   // Only the visible Add button links a face to the ?person= profile. A voice "remember X" or a
@@ -182,6 +185,10 @@ const Index = () => {
   useEffect(() => {
     trackerSinceRef.current = trackerEnabled ? Date.now() : 0;
   }, [trackerEnabled]);
+
+  // Every face match (known or not) goes into working memory; known faces are logged as sightings
+  // Every face in view goes into working memory (and saves a sighting), not just the most prominent
+  useEffect(() => { lastMatches.forEach(match => workingMemory.recordFace(match)); }, [lastMatches, workingMemory]);
 
   // Keep ref in sync so handleVoiceRemember doesn't need lastUnknownDescriptor as a dep
   lastUnknownDescriptorRef.current = lastUnknownDescriptor;
@@ -422,10 +429,20 @@ const Index = () => {
     speak("Let me look.", 6, {});
     // If faces were just recognised, tell the AI who they are so "who is this?" can be answered
     const knownFaces: KnownFaceInfo[] = toKnownFaces(lastMatches);
+    // Memory for the answer: the last few minutes, and saved notes about anyone named in the
+    // question, in view, or seen recently. Read before this question is itself recorded.
+    const recentContext = workingMemory.summary();
+    const personIds = [
+      ...peopleNamedIn(question, people).map(person => person.id!),
+      ...lastMatches.filter(match => match.known && match.id !== undefined).map(match => match.id!),
+      ...workingMemory.recentPeople(),
+    ];
     try {
-      const result = await analyzeImageService(frame, "general", knownFaces, "", "", question);
+      const personNotes = await memoryRepository.notesForQuestion(personIds, question).catch(() => []);
+      const result = await analyzeImageService(frame, "general", knownFaces, "", "", question, { recentContext, personNotes });
       dispatchConnection("success");
       if (cycle !== analysisCycleRef.current || !isActiveRef.current) return;
+      workingMemory.recordQuestion(question, result.description);
       setPriority(result.priority);
       setCaptionText(result.description);
       setAnalysisState("success");
@@ -435,6 +452,7 @@ const Index = () => {
       dispatchConnection("failure");
       if (cycle !== analysisCycleRef.current || !isActiveRef.current) return;
       console.error("[Ask] Question failed:", error);
+      workingMemory.recordQuestion(question, null);
       setAnalysisState("error");
       setCaptionText("Couldn't get an answer");
       speak("Sorry, I couldn't get an answer. Please try again.", 6, {});
@@ -444,7 +462,7 @@ const Index = () => {
         analysisStartedAtRef.current = 0;
       }
     }
-  }, [speak, lastMatches, onSpeechEnd]);
+  }, [speak, lastMatches, onSpeechEnd, workingMemory, people]);
   askQuestionRef.current = askQuestion;
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
@@ -608,6 +626,7 @@ const Index = () => {
       setCaptionText(result.description);
       setTextContent(result.text_content);
       lastDescriptionRef.current = result.description;
+      workingMemory.recordFrame(result);
 
       // Handle finder mode feedback
       if (mode === "finder") {
@@ -733,7 +752,7 @@ const Index = () => {
         analysisStartedAtRef.current = 0;
       }
     }
-  }, [speak, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, isModelsLoaded, detectAndMatchAll, isBusy, forceRestartVoice, pauseVoiceCommand]);
+  }, [speak, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, isModelsLoaded, detectAndMatchAll, isBusy, forceRestartVoice, pauseVoiceCommand, workingMemory]);
 
   const startStream = useCallback(() => {
     if (isAutoCapturing) return;

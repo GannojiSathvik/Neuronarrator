@@ -132,4 +132,39 @@ describe("local memory persistence", () => {
       ["My own note"],
     );
   });
+
+  it("rejects an unknown note source but accepts a sighting", async () => {
+    const person = await repository.addPerson("Arjun", "Friend");
+    await expect(
+      repository.saveMemory({ ...input(person), source: "made-up" as never }),
+    ).rejects.toThrow("Invalid note source");
+    const id = await repository.saveSighting(person, new Date("2025-10-10T16:12:00"));
+    expect(await db.memories.get(id)).toMatchObject({
+      source: "sighting",
+      body: "Seen at 4:12 PM on 10 Oct 2025.",
+    });
+  });
+
+  it("never uses a sighting as the 'Last time' reminder", async () => {
+    const person = await repository.addPerson("Arjun", "Friend");
+    await repository.saveMemory({ ...input(person, "Written"), occurredAt: new Date("2020-01-01") });
+    await repository.saveSighting(person, new Date("2021-01-01"));
+    expect((await repository.latestMemory(person))?.title).toBe("Written");
+  });
+
+  it("finds notes relevant to a question for each person, with the latest sighting", async () => {
+    const arjun = await repository.addPerson("Arjun", "Friend");
+    const meera = await repository.addPerson("Meera", "Family");
+    await repository.saveMemory({ ...input(arjun, "Book"), body: "Arjun recommended The Alchemist.", occurredAt: new Date("2020-01-01") });
+    await repository.saveMemory({ ...input(arjun, "Run"), body: "We went for a run.", occurredAt: new Date("2021-01-01") });
+    await repository.saveMemory({ ...input(meera, "Lunch"), body: "Meera recommended a book too.", occurredAt: new Date("2021-01-01") });
+    await repository.saveSighting(arjun, new Date("2022-01-01T09:05:00"));
+    const notes = await repository.notesForQuestion([arjun, 99], "which book did he recommend?");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].name).toBe("Arjun");
+    expect(notes[0].notes).toEqual([
+      "1 Jan 2020 — Book: Arjun recommended The Alchemist.",
+      "Last recorded sighting: Seen at 9:05 AM on 1 Jan 2022.",
+    ]);
+  });
 });

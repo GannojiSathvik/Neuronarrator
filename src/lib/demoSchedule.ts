@@ -87,12 +87,10 @@ export function demoFacesAt(t: number): NormalizedFace[] {
   return faces;
 }
 
-export interface DemoEvent {
-  kind: "caption" | "hazard";
-  text: string;
-  /** Scheduled time, ms since the demo started. */
-  at: number;
-}
+/** A caption or hazard; `at` is its scheduled time in ms since the demo started. */
+export type DemoEvent =
+  | { kind: "caption"; text: string; at: number }
+  | { kind: "hazard"; text: string; at: number };
 
 // Times first + k*every that fall in (from, to]
 function ticksBetween(from: number, to: number, first: number, every: number): number[] {
@@ -119,5 +117,5 @@ export function demoEventsBetween(fromMs: number, toMs: number): DemoEvent[] {
     text: DEMO_HAZARD,
     at: firstHazardAt + k * hazardEveryMs,
   }));
-  return [...captions, ...hazards].sort((a, b) => a.at - b.at);
+  return [...captions, ...hazards].sort((a: DemoEvent, b: DemoEvent) => a.at - b.at);
 }

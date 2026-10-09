@@ -12,12 +12,24 @@ interface LiveCameraProps {
   smartLoopEnabled: boolean;
   captureRequestId: number;
   cameraEnabled: boolean;
+  /** Demo mode: with no camera (off, missing or blocked) show a dark gradient, not an error. */
+  demoBackdrop?: boolean;
 }
 
 export interface LiveCameraRef {
   getVideoElement: () => HTMLVideoElement | null;
+  /** Whether the preview is drawn mirrored, so face boxes must be flipped to match the screen */
+  isMirrored: () => boolean;
 }
+
+// The preview is shown exactly as the camera sees it (react-webcam's `mirrored` is off), for the
+// front camera too. If this is ever turned on, face overlays flip with it via isMirrored().
+const MIRROR_FRONT_CAMERA = false;
+const isPreviewMirrored = (facingMode: "user" | "environment") =>
+  MIRROR_FRONT_CAMERA && facingMode === "user";
  
+const DEMO_BACKDROP = "bg-gradient-to-br from-slate-900 via-slate-800 to-teal-950";
+
 export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   onCapture,
   isAutoCapturing,
@@ -26,6 +38,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   smartLoopEnabled,
   captureRequestId,
   cameraEnabled,
+  demoBackdrop = false,
 }, ref) => {
   const webcamRef = useRef<Webcam>(null);
   // Default to "user" on desktop (MacBook etc.), "environment" on mobile
@@ -38,9 +51,11 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   const isCapturingRef = useRef(false);
   const lastCaptureRequestIdRef = useRef(0);
 
+  const mirrored = isPreviewMirrored(facingMode);
   useImperativeHandle(ref, () => ({
     getVideoElement: () => webcamRef.current?.video ?? null,
-  }), []);
+    isMirrored: () => mirrored,
+  }), [mirrored]);
  
   const captureFrame = useCallback(async () => {
     if (isCapturingRef.current) return;
@@ -130,6 +145,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
           key={`camera-${cameraKey}-${facingMode}`}
           ref={webcamRef}
           audio={false}
+          mirrored={mirrored}
           screenshotFormat="image/jpeg"
           videoConstraints={videoConstraints}
           playsInline
@@ -138,8 +154,9 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
           className="absolute inset-0 w-full h-full object-cover"
         />
       ) : (
-        <div className="absolute inset-0 bg-black" />
+        <div className={cn("absolute inset-0", demoBackdrop ? DEMO_BACKDROP : "bg-black")} />
       )}
+      {cameraEnabled && demoBackdrop && cameraError && <div className={cn("absolute inset-0", DEMO_BACKDROP)} />}
 
       {/* Flip transition overlay */}
       <AnimatePresence>
@@ -196,7 +213,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
 
     {/* Camera error overlay */}
     <AnimatePresence>
-      {cameraError && (
+      {cameraError && !demoBackdrop && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

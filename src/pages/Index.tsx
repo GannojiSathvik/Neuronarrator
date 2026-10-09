@@ -1,18 +1,16 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import { Link, useSearchParams } from 'react-router-dom';
+import { useState, useCallback, useRef, useEffect, useReducer } from "react";
+import { useSearchParams } from 'react-router-dom';
 import { useMemoryLibrary } from '@/hooks/useMemoryLibrary';
-import { DynamicIsland } from "@/components/DynamicIsland";
 import { LiveCamera, type LiveCameraRef } from "@/components/LiveCamera";
 import { SettingsModal } from "@/components/SettingsModal";
 import { type RelationType } from "@/lib/faceDatabase";
-import { WarningBanner } from "@/components/WarningBanner";
-import { CaptionDisplay } from "@/components/CaptionDisplay";
 import { AddPersonModal } from "@/components/AddPersonModal";
-import { FaceRecognitionOverlay, PersonCard } from "@/components/FaceRecognitionOverlay";
-import { FaceAnchoredPanel } from "@/components/FaceAnchoredPanel";
+import { FaceRecognitionOverlay } from "@/components/FaceRecognitionOverlay";
+import { HudOverlay } from "@/components/hud/HudOverlay";
+import { ControlBar } from "@/components/hud/ControlBar";
 import { useFaceTracker } from "@/hooks/useFaceTracker";
 import { useScreenSize } from "@/hooks/useScreenSize";
-import { facePanelWidth, videoBoxToScreen } from "@/lib/facePlacement";
+import { useDemoEvents, type DemoNotice } from "@/hooks/useDemoEvents";
 import { useNeuroVoice, unlockAudioForMobile } from "@/hooks/useNeuroVoice";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useHapticBraille } from "@/hooks/useHapticBraille";
@@ -23,21 +21,25 @@ import { useVoiceCommand } from "@/hooks/useVoiceCommand";
 import { useVoiceControl, type CommandMode } from "@/hooks/useVoiceControl";
 import { HapticBrailleIndicator } from "@/components/HapticBrailleIndicator";
 import { PushToTalkOverlay } from "@/components/PushToTalkOverlay";
-import { analyzeImage as analyzeImageService, type VisionMode, type KnownFaceInfo } from "@/services/vision";
-import { Settings, BookOpen } from "lucide-react";
+import { analyzeImage as analyzeImageService, type VisionMode, type KnownFaceInfo, type VisionResponse } from "@/services/vision";
+import { Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { readerSpeech } from "@/lib/readerSpeech";
 import { confirmStep } from "@/lib/confirmWindow";
 import { shouldSkipRepeat, type SpokenMemory } from "@/lib/novelty";
 import { readAutoDescribe, shouldAutoContinue, writeAutoDescribe } from "@/lib/autoDescribe";
 import { memoryRepository } from "@/lib/memoryRepository";
-import { lastTimeSentence } from "@/lib/memory";
+import { lastTimeSentence, memoryExcerpt } from "@/lib/memory";
+import { buildHudFromDemo, buildHudFromReal, hazardBannerText, type HudHazard, type HudState } from "@/lib/hudState";
+import { connectionReducer, INITIAL_CONNECTION, isConnected } from "@/lib/connectionStatus";
+import { DEMO_CAPTIONS, readDemoMode, writeDemoMode } from "@/lib/demoSchedule";
+import { shouldSpeakMemory } from "@/lib/memoryRepeat";
 
 type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 
 const Index = () => {
   const [params, setParams] = useSearchParams();
-  const { people } = useMemoryLibrary();
+  const { people, memories } = useMemoryLibrary();
   const enrollmentPerson = people.find(person => person.id === Number(params.get('person')) && !person.isSample);
   const [requestedName, setRequestedName] = useState('');
   // Only the visible Add button links a face to the ?person= profile. A voice "remember X" or a
@@ -51,7 +53,10 @@ const Index = () => {
   const [captionText, setCaptionText] = useState("");
   const [textContent, setTextContent] = useState("");
   const [priority, setPriority] = useState(0);
-  const [showWarning, setShowWarning] = useState(false);
+  // The latest hazard for the banner; it hides itself 4s after `at`
+  const [hazard, setHazard] = useState<HudHazard | undefined>();
+  // Backend health for the status pill: "Reconnecting…" after two failed analyze calls in a row
+  const [connection, dispatchConnection] = useReducer(connectionReducer, INITIAL_CONNECTION);
   const [captureRequestId, setCaptureRequestId] = useState(0);
   const [cameraEnabled, setCameraEnabled] = useState(false);
   const isAnalyzingRef = useRef(false);
@@ -89,6 +94,16 @@ const Index = () => {
   // Set by an explicit request (Describe button, voice, mode switch) and read by the capture it
   // starts: an answer the user asked for is spoken even if it repeats the last one.
   const requestedCaptureRef = useRef(false);
+
+  // Demo mode: scripted people, captions and hazards drive the HUD instead of the camera and the
+  // vision service, so the UI can be shown without a backend or a real face. No frames are sent.
+  const [demoMode, setDemoMode] = useState(readDemoMode);
+  const demoModeRef = useRef(demoMode);
+  demoModeRef.current = demoMode;
+  const demoActive = demoMode && isAutoCapturing;
+  // Demo person id → when their memory was last spoken (at most once a minute)
+  const demoMemorySpokenAtRef = useRef(new Map<string, number>());
+  const demoHazardUntilRef = useRef(0);
 
   // What was last said aloud, so a rephrasing of an unchanged scene isn't spoken again
   const lastSpokenRef = useRef<SpokenMemory | null>(null);
@@ -150,7 +165,7 @@ const Index = () => {
   // instead of covering the view. General mode only: other modes aren't about people.
   const getVideoElement = useCallback(() => cameraRef.current?.getVideoElement() ?? null, []);
   const isTrackerPaused = useCallback(() => isAnalyzingRef.current, []);
-  const trackerEnabled = isAutoCapturing && isModelsLoaded && mode === "general";
+  const trackerEnabled = isAutoCapturing && isModelsLoaded && mode === "general" && !demoMode;
   const trackedFace = useFaceTracker(getVideoElement, trackerEnabled, isTrackerPaused);
   const screen = useScreenSize();
   // When the tracker has been running a moment and sees nobody, a capture can skip the slow full
@@ -370,6 +385,8 @@ const Index = () => {
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     if (isAnalyzingRef.current || modalOpenRef.current || !isActiveRef.current || pushToTalkHeldRef.current || transcribingRef.current) return;
+    // Demo mode never sends a frame to the backend
+    if (demoModeRef.current) return;
     if (isBusy()) return;
     isAnalyzingRef.current = true;
     analysisStartedAtRef.current = Date.now();
@@ -478,7 +495,14 @@ const Index = () => {
       }
 
       // Send image to vision API with mode + targetItem
-      const result = await analyzeImageService(base64, mode, knownFaces, lastDescriptionRef.current, targetItem);
+      let result: VisionResponse;
+      try {
+        result = await analyzeImageService(base64, mode, knownFaces, lastDescriptionRef.current, targetItem);
+        dispatchConnection("success");
+      } catch (analyzeError) {
+        dispatchConnection("failure");
+        throw analyzeError;
+      }
       const reminder = reminderLookup ? await reminderLookup : "";
       if (isStale()) {
         console.log("[Loop] Discarding result from an abandoned capture cycle");
@@ -500,7 +524,6 @@ const Index = () => {
       const stayQuiet = () => {
         console.log("[Loop] Scene unchanged — not repeating it");
         setAnalysisState("success");
-        setShowWarning(false);
         isAnalyzingRef.current = false;
         analysisStartedAtRef.current = 0;
         if (!shouldAutoContinue(mode, autoDescribeRef.current)) return;
@@ -521,7 +544,6 @@ const Index = () => {
       if (mode === "finder") {
         if (result.found) {
           setAnalysisState("success");
-          setShowWarning(false);
           playFoundPing();
           // Also vibrate on found
           if ("vibrate" in navigator) {
@@ -549,7 +571,6 @@ const Index = () => {
       else if (mode === "currency") {
         if (isRepeat(result.description)) return stayQuiet();
         setAnalysisState("success");
-        setShowWarning(false);
         rememberSpoken(result.description);
         speechStartedAtRef.current = Date.now();
         speak(result.description, 5, { onEnd: onSpeechEnd });
@@ -562,7 +583,6 @@ const Index = () => {
         const readKey = result.text_content.trim() || result.description;
         if (isRepeat(readKey)) return stayQuiet();
         setAnalysisState("success");
-        setShowWarning(false);
         rememberSpoken(readKey);
         speechStartedAtRef.current = Date.now();
         speak(speechText, 5, { onEnd: onSpeechEnd });
@@ -577,7 +597,7 @@ const Index = () => {
 
         if (result.priority > 7) {
           setAnalysisState("warning");
-          setShowWarning(true);
+          setHazard({ text: hazardBannerText(result.hazards, result.description), at: Date.now() });
           sosPattern();
           playHazardSound(result.priority);
           // Hazards are always spoken, even when repeated
@@ -596,7 +616,6 @@ const Index = () => {
           // A pending memory reminder is news even when the scene isn't
           if (!reminder && isRepeat(speechText)) return stayQuiet();
           setAnalysisState("success");
-          setShowWarning(false);
           playHazardSound(result.priority);
           rememberSpoken(speechText);
           if (reminder && seenPersonId !== undefined) announcedPeopleRef.current.set(seenPersonId, Date.now());
@@ -669,7 +688,8 @@ const Index = () => {
     setCaptionText("");
     setTextContent("");
     setPriority(0);
-    setShowWarning(false);
+    setHazard(undefined);
+    dispatchConnection("reset");
     stop();
     stopHaptic();
   }, [stop, stopHaptic]);
@@ -755,20 +775,81 @@ const Index = () => {
     return "Touch anywhere to start";
   };
 
+  // Demo events are spoken with the same voice as real results. A hazard interrupts anything;
+  // captions never talk over other speech; a person's memory is said at most once a minute.
+  const handleDemoNotice = useCallback((notice: DemoNotice) => {
+    if (modalOpenRef.current || pushToTalkHeldRef.current || transcribingRef.current) return;
+    if (notice.kind === "hazard") {
+      demoHazardUntilRef.current = Date.now() + 4000;
+      sosPattern();
+      playHazardSound(10);
+      speak(`Warning! ${notice.text}`, 10, {});
+      return;
+    }
+    if (Date.now() < demoHazardUntilRef.current) return;
+    if (notice.kind === "caption") {
+      if (!isBusy()) speak(notice.text, 5, {});
+      return;
+    }
+    const { face } = notice;
+    const now = Date.now();
+    if (!shouldSpeakMemory(demoMemorySpokenAtRef.current.get(face.id), now)) return;
+    demoMemorySpokenAtRef.current.set(face.id, now);
+    // No "neuro …" here: the hands-free command listener would hear its own wake word
+    speak(
+      face.name
+        ? `${face.name}, your ${face.relation?.toLowerCase() ?? "friend"}. ${face.memory ?? ""}`
+        : "Someone you don't know is in front of you.",
+      6,
+      {},
+    );
+  }, [speak, isBusy, sosPattern, playHazardSound]);
+  const demo = useDemoEvents(demoActive, handleDemoNotice);
+
+  const handleDescribeNow = () => {
+    stop(); // a fresh request interrupts whatever is being said
+    if (demoModeRef.current) {
+      speak(demo.caption ?? DEMO_CAPTIONS[0], 5, {});
+      return;
+    }
+    requestCapture();
+  };
+
+  // The mode buttons do what the hands-free mode commands do. Find needs an item, which is set
+  // by voice ("find my keys"); without one, explain how instead of searching for nothing.
+  const handleModeSelect = (next: CommandMode) => {
+    if (next === "finder" && !targetItem) {
+      speak("To find something, hold the microphone and say find, then the item. For example, find my keys.", 5, {});
+      return;
+    }
+    if (next === commandMode) return;
+    handleModeSwitch(next, next === "finder" ? targetItem : undefined);
+  };
+
   const handleAddPerson = () => { setRequestedName(''); setLinkToPerson(true); setAddPersonOpen(true); stop(); };
 
-  const captionProps = {
-    text: captionText,
-    textContent,
-    isVisible: analysisState === "success" || analysisState === "warning" || analysisState === "error",
-    priority,
-    mode,
-    // While auto-capturing the app speaks every result aloud, so a polite live region would make
-    // TalkBack/VoiceOver read each caption a second time over the TTS. Captions are only announced
-    // when the app isn't narrating; errors are always announced via the caption's alert region.
-    announce: !isAutoCapturing,
-    isError: analysisState === "error",
-  };
+  // One view-model for the HUD, from the demo timeline or from real data (see src/lib/hudState).
+  const latestMemory = lastMatch?.known && lastMatch.id !== undefined
+    ? memories.find(memory => memory.personId === lastMatch.id) // newest first
+    : undefined;
+  const captionVisible = analysisState === "success" || analysisState === "warning" || analysisState === "error";
+  const hud: HudState = demoActive
+    ? buildHudFromDemo(demo, screen)
+    : buildHudFromReal({
+        trackedFace,
+        mirrored: cameraRef.current?.isMirrored() ?? false,
+        match: isModelsLoaded && lastMatch
+          ? { known: lastMatch.known, name: lastMatch.name, id: lastMatch.id, relation: lastMatch.context?.relation }
+          : null,
+        canEnroll: !!lastUnknownDescriptor,
+        memory: latestMemory ? memoryExcerpt(latestMemory.body, 160) : undefined,
+        screen,
+        caption: captionVisible && (captionText || textContent)
+          ? { text: captionText, textContent, isError: analysisState === "error" }
+          : undefined,
+        hazard,
+        connected: isConnected(connection),
+      });
 
   return (
     <div className={cn("min-h-screen bg-background flex flex-col relative", getModeBorderClass())}>
@@ -782,12 +863,10 @@ const Index = () => {
         smartLoopEnabled={true}
         captureRequestId={captureRequestId}
         cameraEnabled={cameraEnabled}
+        demoBackdrop={demoMode}
       />
 
-      {/* Warning Banner */}
-      <WarningBanner isVisible={showWarning} />
-
-      {/* Face Recognition Overlay */}
+      {/* Face recognition status: model loading/errors, voice hint, stored faces */}
       <FaceRecognitionOverlay
         isModelsLoaded={isModelsLoaded}
         isLoadingModels={isLoadingModels}
@@ -801,68 +880,13 @@ const Index = () => {
         isVisible={isAutoCapturing || isLoadingModels || !!modelLoadError}
         isVoiceListening={isVoiceListening}
         lastVoiceCommand={lastCommand}
-        hidePersonCard={!!trackedFace}
+        hidePersonCard={hud.faces.length > 0 || demoActive}
       />
 
-      {/* Dynamic Island */}
-      <div className={`flex justify-center pt-4 pb-2 relative z-10 ${showWarning ? "mt-16" : ""}`}>
-        <DynamicIsland status={analysisState} priority={priority} commandMode={commandMode} />
-      </div>
-
-      <Link to="/" className="fixed bottom-5 left-4 z-30 flex items-center gap-2 rounded-full border border-white/20 bg-black/75 px-4 py-3 text-sm text-white"><BookOpen size={16} />Memory space</Link>
-      {!isAutoCapturing && <div className="fixed bottom-24 left-5 right-5 z-10 mx-auto max-w-xl rounded-2xl border border-white/15 bg-black/80 p-5 text-center">
-        <p className="text-lg font-medium mb-2">{enrollmentPerson ? `Connect a face to ${enrollmentPerson.name}` : 'Live vision & familiar faces'}</p>
-        <p className="text-sm text-white/70">Starting sends camera frames to the vision service and enables browser voice commands. Saved conversation notes stay on this device.</p>
-        {enrollmentPerson && <p className="mt-2 text-sm text-green-200">Have them face the camera, then choose Add to confirm and save.</p>}
-        <p className="mt-2 text-xs text-white/50">Assistive prototype. Do not rely on it for navigation or hazard safety.</p>
-      </div>}
-
-      {/* Settings button — small, top-right corner */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setSettingsOpen(true);
-        }}
-        className="fixed top-4 right-16 z-30 w-10 h-10 rounded-full bg-surface/60 backdrop-blur-xl border border-glass-border flex items-center justify-center"
-        aria-label="Settings"
-      >
-        <Settings className="w-5 h-5 text-muted-foreground" />
-      </button>
-
-      {/* Status text (+ Stop button while scanning; z-30 keeps it above the push-to-talk overlay) */}
-      <div className={cn("flex justify-center items-center gap-2 px-4 pt-2 relative", isAutoCapturing ? "z-30" : "z-10")}>
-        <div className="glass-panel super-ellipse-sm px-4 py-2">
-          <p className="text-sm text-muted-foreground text-center tracking-tight" role="status" aria-live="polite">
-            {getStatusText()}
-          </p>
-        </div>
-        {isAutoCapturing && !autoDescribe && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              stop(); // a fresh request interrupts whatever is being said
-              requestCapture();
-            }}
-            disabled={analysisState === "analyzing"}
-            className="glass-panel super-ellipse-sm min-h-12 px-6 py-3 text-base font-semibold text-ios-blue disabled:opacity-50"
-            aria-label="Describe now: describe what is in front of me"
-          >
-            Describe now
-          </button>
-        )}
-        {isAutoCapturing && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              stopStream();
-            }}
-            className="glass-panel super-ellipse-sm px-4 py-2 text-sm font-semibold text-ios-red"
-            aria-label="Stop scanning"
-          >
-            Stop
-          </button>
-        )}
-      </div>
+      {/* What the app is doing, for screen readers (shown visually by the status pill and mode switch) */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {getStatusText()}
+      </p>
 
       {/* Push-to-Talk Overlay — full screen touch target */}
       <PushToTalkOverlay
@@ -876,22 +900,57 @@ const Index = () => {
         commandMode={commandMode}
       />
 
-      {/* Caption: beside the tracked face (with who it is), otherwise a small corner box */}
-      {trackedFace ? (
-        <FaceAnchoredPanel faceBox={videoBoxToScreen(trackedFace.box, trackedFace.video, screen)} screen={screen} width={facePanelWidth(screen)}>
-          {isModelsLoaded && lastMatch && (
-            <PersonCard
-              compact
-              match={lastMatch}
-              hasUnknownFace={!!lastUnknownDescriptor}
-              onAddPerson={handleAddPerson}
-            />
-          )}
-          <CaptionDisplay placement="inline" {...captionProps} />
-        </FaceAnchoredPanel>
-      ) : (
-        <CaptionDisplay placement="corner" {...captionProps} />
-      )}
+      {/* Heads-up display: face tags, hazard banner, status pill, caption, control bar */}
+      <HudOverlay
+        hud={hud}
+        screen={screen}
+        active={isAutoCapturing}
+        processing={analysisState === "analyzing"}
+        // While auto-capturing the app speaks every result aloud, so a polite live region would make
+        // TalkBack/VoiceOver read each caption a second time over the TTS. Captions are only announced
+        // when the app isn't narrating; errors are always announced via the caption's alert region.
+        announce={!isAutoCapturing}
+        mode={mode}
+        priority={priority}
+        onAddPerson={handleAddPerson}
+        topRight={
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setSettingsOpen(true);
+            }}
+            className="w-11 h-11 rounded-full bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            aria-label="Settings"
+          >
+            <Settings className="w-5 h-5 text-white" aria-hidden="true" />
+          </button>
+        }
+        intro={!isAutoCapturing && (
+          <div className="pointer-events-auto mx-auto w-full max-w-xl rounded-2xl border border-white/15 bg-black/80 p-5 text-center">
+            <p className="text-lg font-medium mb-2">{enrollmentPerson ? `Connect a face to ${enrollmentPerson.name}` : 'Live vision & familiar faces'}</p>
+            <p className="text-sm text-white/70">Starting sends camera frames to the vision service and enables browser voice commands. Saved conversation notes stay on this device.</p>
+            {demoMode && <p className="mt-2 text-sm text-sky-200">Demo mode is on: the people, captions and hazards are simulated and no frames are sent.</p>}
+            {enrollmentPerson && <p className="mt-2 text-sm text-green-200">Have them face the camera, then choose Add to confirm and save.</p>}
+            <p className="mt-2 text-xs text-white/50">Assistive prototype. Do not rely on it for navigation or hazard safety.</p>
+          </div>
+        )}
+        controls={
+          <ControlBar
+            isActive={isAutoCapturing}
+            onStartStop={toggleAutoCapture}
+            mode={commandMode}
+            onModeSelect={handleModeSelect}
+            targetItem={targetItem}
+            isListening={isVoiceControlListening}
+            isTranscribing={isVoiceControlTranscribing}
+            onMicStart={handleTouchStart}
+            onMicEnd={handleTouchEnd}
+            showDescribeNow={isAutoCapturing && !autoDescribe}
+            describeDisabled={analysisState === "analyzing"}
+            onDescribeNow={handleDescribeNow}
+          />
+        }
+      />
 
       {/* Haptic Braille Indicator */}
       <HapticBrailleIndicator
@@ -908,6 +967,11 @@ const Index = () => {
         onAutoDescribeChange={(enabled) => {
           setAutoDescribe(enabled);
           writeAutoDescribe(enabled);
+        }}
+        demoMode={demoMode}
+        onDemoModeChange={(enabled) => {
+          setDemoMode(enabled);
+          writeDemoMode(enabled);
         }}
       />
 

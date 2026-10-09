@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type VisionMode } from "@/services/vision";
 
 interface CaptionDisplayProps {
@@ -12,6 +12,9 @@ interface CaptionDisplayProps {
   announce?: boolean;
   // Error captions are always announced, even when announce is off
   isError?: boolean;
+  // "corner": a small box in the bottom-right corner. "inline": no positioning of its own,
+  // for when the parent places it beside a face.
+  placement?: "corner" | "inline";
 }
 
 // Safety: if the AI returns raw JSON instead of a clean description, extract it
@@ -32,8 +35,10 @@ function sanitizeCaption(raw: string): string {
   return raw;
 }
 
-export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general", announce = true, isError = false }: CaptionDisplayProps) => {
+export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general", announce = true, isError = false, placement = "corner" }: CaptionDisplayProps) => {
   const contentKeyRef = useRef(0);
+  // Collapsed to a few lines so the box doesn't block the view; tap to read it all.
+  const [expanded, setExpanded] = useState(false);
   const prevTextRef = useRef(text);
 
   const cleanText = sanitizeCaption(text);
@@ -42,6 +47,17 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
     contentKeyRef.current += 1;
     prevTextRef.current = cleanText;
   }
+
+  // A new caption starts collapsed again
+  useEffect(() => {
+    setExpanded(false);
+  }, [cleanText]);
+
+  const toggleExpanded = (event: React.SyntheticEvent) => {
+    // The full-screen push-to-talk layer sits underneath; don't let this tap reach it.
+    event.stopPropagation();
+    setExpanded((value) => !value);
+  };
 
   const hasTranscribedText = textContent && textContent.length > 0;
   const hasDescription = cleanText && cleanText.length > 0;
@@ -70,18 +86,33 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
     <AnimatePresence>
       {isVisible && (hasDescription || hasTranscribedText) && (
         <motion.div
-          initial={{ opacity: 0, y: 16 }}
+          initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 16 }}
-          transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-          className="fixed bottom-8 left-4 right-4 z-30"
+          exit={{ opacity: 0, y: 8 }}
+          transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
+          className={
+            placement === "corner"
+              ? "fixed bottom-20 sm:bottom-5 right-4 z-30 w-[min(22rem,calc(100vw-2rem))]"
+              : "w-full"
+          }
         >
-          <motion.div 
-            className="bg-gradient-to-br from-black/90 to-black/80 backdrop-blur-2xl rounded-3xl p-5 max-h-52 overflow-y-auto border border-white/10 shadow-2xl"
+          <motion.div
+            role="button"
+            tabIndex={0}
+            // No aria-label: the caption text itself must stay what screen readers read.
+            aria-expanded={expanded}
+            onClick={toggleExpanded}
+            onTouchStart={(event) => event.stopPropagation()}
+            onTouchEnd={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") toggleExpanded(event);
+            }}
+            // See-through and compact: the camera view stays visible behind it.
+            className="bg-black/55 backdrop-blur-md rounded-2xl p-3 max-h-[45vh] overflow-y-auto border border-white/10 shadow-lg cursor-pointer"
             layout
-            transition={{ duration: 0.3 }}
+            transition={{ duration: 0.2 }}
           >
-            <div className="space-y-3">
+            <div className="space-y-2">
               {/* Mode label */}
               {getModeLabel() && (
                 <div className="flex items-center gap-2 mb-1">
@@ -100,7 +131,7 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.4, ease: "easeInOut" }}
-                    className={`text-lg font-medium leading-relaxed tracking-tight ${getAccentClass()}`}
+                    className={`text-[15px] font-medium leading-snug tracking-tight ${expanded ? "" : "line-clamp-3"} ${getAccentClass()}`}
                   >
                     {cleanText}
                   </motion.p>
@@ -113,7 +144,7 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ duration: 0.4, delay: 0.15 }}
-                  className="mt-3 pt-3 border-t border-white/15"
+                  className="mt-2 pt-2 border-t border-white/15"
                 >
                   <div className="flex items-center gap-2 mb-2">
                     <div className="w-1.5 h-1.5 rounded-full bg-ios-blue animate-pulse" />
@@ -128,7 +159,7 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                       transition={{ duration: 0.35 }}
-                      className="text-base text-white/85 leading-relaxed whitespace-pre-wrap font-light"
+                      className={`text-sm text-white/85 leading-snug whitespace-pre-wrap font-light ${expanded ? "" : "line-clamp-2"}`}
                     >
                       {textContent}
                     </motion.p>

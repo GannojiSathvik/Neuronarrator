@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 interface UseVoiceInputReturn {
@@ -36,12 +36,15 @@ export function useVoiceInput(): UseVoiceInputReturn {
       });
       streamRef.current = stream;
 
-      // Use webm/opus which is widely supported
+      // Use webm/opus which is widely supported; fall back to the browser default
+      // (e.g. Safari only supports audio/mp4 — passing an unsupported mimeType throws)
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
-        : "audio/webm";
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : undefined;
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -55,6 +58,10 @@ export function useVoiceInput(): UseVoiceInputReturn {
       console.log("Voice recording started");
     } catch (err) {
       console.error("Microphone access error:", err);
+      // Release the mic if getUserMedia succeeded but MediaRecorder setup failed
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      mediaRecorderRef.current = null;
       setError("Could not access microphone. Please check permissions.");
     }
   }, []);
@@ -76,7 +83,8 @@ export function useVoiceInput(): UseVoiceInputReturn {
         setIsTranscribing(true);
 
         try {
-          const audioBlob = new Blob(chunksRef.current, { type: "audio/webm" });
+          const recordedType = (mediaRecorder.mimeType || "audio/webm").split(";")[0];
+          const audioBlob = new Blob(chunksRef.current, { type: recordedType });
           console.log("Audio recorded, size:", audioBlob.size, "bytes");
 
           if (audioBlob.size < 1000) {
@@ -101,7 +109,7 @@ export function useVoiceInput(): UseVoiceInputReturn {
           const { data, error: fnError } = await supabase.functions.invoke(
             "speech-to-text",
             {
-              body: { audioBase64, language_code: "en-IN" },
+              body: { audioBase64, language_code: "en-IN", mime_type: recordedType },
             }
           );
 
@@ -151,6 +159,19 @@ export function useVoiceInput(): UseVoiceInputReturn {
     setIsTranscribing(false);
     setTranscript(null);
     setError(null);
+  }, []);
+
+  // Release the microphone if the component unmounts mid-recording
+  useEffect(() => {
+    return () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.onstop = null;
+        try { recorder.stop(); } catch { /* already stopped */ }
+      }
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    };
   }, []);
 
   return {

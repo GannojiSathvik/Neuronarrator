@@ -1,4 +1,4 @@
- import { useState, useCallback, useRef } from "react";
+ import { useState, useCallback, useRef, useEffect } from "react";
  
  // Standard Braille dot patterns for haptic feedback (6-dot cell: dots 1-6)
  // Dot positions: 1 4
@@ -103,22 +103,32 @@
    const [isPlaying, setIsPlaying] = useState(false);
    const [currentChar, setCurrentChar] = useState<string | null>(null);
    const [currentDots, setCurrentDots] = useState<number[]>([]);
-   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-   const abortRef = useRef(false);
+   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   // Resolver for the in-flight wait, so stopping doesn't leave the playback promise pending forever
+   const pendingResolveRef = useRef<(() => void) | null>(null);
+   // Incremented on every stop/start; a playback loop exits when its run id is no longer current
+   const runIdRef = useRef(0);
  
-   const stopHaptic = useCallback(() => {
-     abortRef.current = true;
+   const cancelPending = useCallback(() => {
+     runIdRef.current += 1;
      if (timeoutRef.current) {
        clearTimeout(timeoutRef.current);
        timeoutRef.current = null;
      }
+     const resolve = pendingResolveRef.current;
+     pendingResolveRef.current = null;
+     if (resolve) resolve();
      if ("vibrate" in navigator) {
-       navigator.vibrate(0); // Stop any ongoing vibration
+       try { navigator.vibrate(0); } catch { /* vibration unsupported */ } // Stop any ongoing vibration
      }
+   }, []);
+ 
+   const stopHaptic = useCallback(() => {
+     cancelPending();
      setIsPlaying(false);
      setCurrentChar(null);
      setCurrentDots([]);
-   }, []);
+   }, [cancelPending]);
  
    const playHapticMessage = useCallback(async (text: string): Promise<void> => {
      if (!("vibrate" in navigator)) {
@@ -128,14 +138,14 @@
  
      // Stop any existing playback
      stopHaptic();
-     abortRef.current = false;
+     const runId = runIdRef.current;
      setIsPlaying(true);
  
      const upperText = text.toUpperCase();
  
      // Play each character sequentially
      for (let i = 0; i < upperText.length; i++) {
-       if (abortRef.current) break;
+       if (runIdRef.current !== runId) break;
  
        const char = upperText[i];
        const dots = BRAILLE_MAP[char];
@@ -155,17 +165,24 @@
  
          // Wait for pattern to complete + character separator
          await new Promise<void>((resolve) => {
-           timeoutRef.current = setTimeout(resolve, duration + CHAR_SEPARATOR);
+           pendingResolveRef.current = resolve;
+           timeoutRef.current = setTimeout(() => {
+             pendingResolveRef.current = null;
+             resolve();
+           }, duration + CHAR_SEPARATOR);
          });
        }
      }
  
-     if (!abortRef.current) {
+     if (runIdRef.current === runId) {
        setIsPlaying(false);
        setCurrentChar(null);
        setCurrentDots([]);
      }
    }, [stopHaptic]);
+ 
+   // Cancel any in-progress playback on unmount
+   useEffect(() => cancelPending, [cancelPending]);
  
    return {
      playHapticMessage,

@@ -8,16 +8,6 @@ import { useRef, useCallback, useEffect, useState } from "react";
  * Robust matching handles common mis-transcriptions on mobile.
  */
 
-interface SpeechRecognitionEvent {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
-}
-
-type SpeechRecognitionErrorEvent = {
-  error: string;
-  message?: string;
-};
-
 // All patterns that SpeechRecognition might hear for "neuro remember"
 const REMEMBER_PATTERNS = [
   "neuro remember",
@@ -52,6 +42,11 @@ const CLEAR_PATTERNS = [
   "neural clear all",
 ];
 
+const STOP_PATTERNS = [
+  "neuro stop", "neural stop", "nero stop",
+  "neuro pause", "neural pause", "nero pause",
+];
+
 // Mode switching patterns for always-on detection
 const MODE_CURRENCY_PATTERNS = [
   "neuro currency", "neural currency", "nero currency",
@@ -75,14 +70,26 @@ const MODE_STANDARD_PATTERNS = [
 interface UseVoiceCommandOptions {
   onRememberCommand: (name: string) => void;
   onClearCommand: () => void;
+  onStopCommand?: () => void;
   onModeSwitch?: (mode: "standard" | "currency" | "finder", targetItem?: string) => void;
   enabled: boolean;
 }
 
-export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitch, enabled }: UseVoiceCommandOptions) {
+// Detach all handlers before stopping so a replaced instance can't fire commands or schedule restarts
+function detachAndAbort(recognition: SpeechRecognitionLike) {
+  recognition.onstart = null;
+  recognition.onresult = null;
+  recognition.onerror = null;
+  recognition.onend = null;
+  try {
+    recognition.abort();
+  } catch { /* already stopped */ }
+}
+
+export function useVoiceCommand({ onRememberCommand, onClearCommand, onStopCommand, onModeSwitch, enabled }: UseVoiceCommandOptions) {
   const [isListening, setIsListening] = useState(false);
   const [lastCommand, setLastCommand] = useState<string | null>(null);
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const isStoppedManuallyRef = useRef(false);
   const isRunningRef = useRef(false);
   const restartTimeoutRef = useRef<number | null>(null);
@@ -93,6 +100,11 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
   const onRememberRef = useRef(onRememberCommand);
   const onClearRef = useRef(onClearCommand);
   const onModeSwitchRef = useRef(onModeSwitch);
+  const onStopRef = useRef(onStopCommand);
+  useEffect(() => { onStopRef.current = onStopCommand; }, [onStopCommand]);
+  // Latest `enabled` value, read by recognizer callbacks created in earlier renders
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   useEffect(() => { onRememberRef.current = onRememberCommand; }, [onRememberCommand]);
   useEffect(() => { onClearRef.current = onClearCommand; }, [onClearCommand]);
   useEffect(() => { onModeSwitchRef.current = onModeSwitch; }, [onModeSwitch]);
@@ -105,7 +117,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
   }, []);
 
   const startListening = useCallback(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       console.warn("[VoiceCmd] SpeechRecognition not supported in this browser");
       return;
@@ -117,9 +129,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
     clearRestartTimeout();
 
     if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch (_) {}
+      detachAndAbort(recognitionRef.current);
       recognitionRef.current = null;
     }
 
@@ -136,7 +146,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
       console.log("[VoiceCmd] Listener started");
     };
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event: SpeechRecognitionEventLike) => {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (!result.isFinal) continue;
@@ -167,6 +177,18 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
                 console.log("[VoiceCmd] ✅ REMEMBER command detected ->", cleanName);
                 setLastCommand(`Remember: ${cleanName}`);
                 onRememberRef.current(cleanName);
+                return;
+              }
+            }
+          }
+
+          // Check for "neuro stop"
+          if (onStopRef.current) {
+            for (const pattern of STOP_PATTERNS) {
+              if (transcript.includes(pattern)) {
+                console.log("[VoiceCmd] ✅ STOP command detected");
+                setLastCommand("Stop");
+                onStopRef.current();
                 return;
               }
             }
@@ -222,7 +244,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
       }
     };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
       if (event.error === "no-speech" || event.error === "aborted") {
         // Normal — don't count as real error
         return;
@@ -240,24 +262,27 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
     };
 
     recognition.onend = () => {
+      // Ignore late onend events from an instance that has already been replaced/stopped,
+      // otherwise it clobbers isRunningRef for the current instance and schedules a duplicate restart.
+      if (recognitionRef.current !== recognition) return;
       isRunningRef.current = false;
       setIsListening(false);
       console.log("[VoiceCmd] Listener ended");
 
       // Auto-restart unless manually stopped
-      if (!isStoppedManuallyRef.current && enabled) {
+      if (!isStoppedManuallyRef.current && enabledRef.current) {
         // Exponential backoff: 800ms, 1.5s, 3s, 5s, cap at 8s
         const backoffMs = Math.min(8000, 800 * Math.pow(1.5, Math.min(consecutiveErrorsRef.current, 6)));
         clearRestartTimeout();
         restartTimeoutRef.current = window.setTimeout(() => {
-          if (!isStoppedManuallyRef.current && enabled && !isRunningRef.current) {
+          if (!isStoppedManuallyRef.current && enabledRef.current && !isRunningRef.current) {
             console.log("[VoiceCmd] Auto-restarting listener...");
             try {
               recognition.start();
             } catch (err) {
               console.warn("[VoiceCmd] Restart failed:", err);
               restartTimeoutRef.current = window.setTimeout(() => {
-                if (!isStoppedManuallyRef.current && enabled && !isRunningRef.current) {
+                if (!isStoppedManuallyRef.current && enabledRef.current && !isRunningRef.current) {
                   startListening();
                 }
               }, 3000);
@@ -276,21 +301,31 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
       console.error("[VoiceCmd] Failed to start:", err);
       // Retry after delay
       restartTimeoutRef.current = window.setTimeout(() => {
-        if (enabled && !isRunningRef.current) startListening();
+        if (enabledRef.current && !isRunningRef.current) startListening();
       }, 2000);
     }
-  }, [enabled, clearRestartTimeout]);
+  }, [clearRestartTimeout]);
 
   const stopListening = useCallback(() => {
     isStoppedManuallyRef.current = true;
     isRunningRef.current = false;
     clearRestartTimeout();
     if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch (_) {}
+      detachAndAbort(recognitionRef.current);
       recognitionRef.current = null;
     }
+    setIsListening(false);
+  }, [clearRestartTimeout]);
+
+  // Synchronously release the mic (e.g. before push-to-talk starts) WITHOUT marking the
+  // listener as manually stopped, so the health check / enabled effect can bring it back.
+  const pause = useCallback(() => {
+    clearRestartTimeout();
+    if (recognitionRef.current) {
+      detachAndAbort(recognitionRef.current);
+      recognitionRef.current = null;
+    }
+    isRunningRef.current = false;
     setIsListening(false);
   }, [clearRestartTimeout]);
 
@@ -301,7 +336,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
     isStoppedManuallyRef.current = false;
     clearRestartTimeout();
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (_) {}
+      detachAndAbort(recognitionRef.current);
       recognitionRef.current = null;
     }
     isRunningRef.current = false;
@@ -335,5 +370,5 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitc
     return () => window.clearInterval(healthCheck);
   }, [enabled, startListening]);
 
-  return { isListening, lastCommand, forceRestart };
+  return { isListening, lastCommand, forceRestart, pause };
 }

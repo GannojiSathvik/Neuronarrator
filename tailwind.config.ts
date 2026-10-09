@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import tailwindcssAnimate from "tailwindcss-animate";
 
 export default {
   darkMode: ["class"],
@@ -66,6 +67,9 @@ export default {
           blue: "hsl(var(--ios-blue))",
           green: "hsl(var(--ios-green))",
            red: "hsl(var(--ios-red))",
+          orange: "hsl(var(--ios-orange))",
+          purple: "hsl(var(--ios-purple))",
+          "surface-elevated": "hsl(var(--surface-elevated))",
         },
         glass: {
           bg: "hsl(var(--glass-bg))",
@@ -126,5 +130,5 @@ export default {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [tailwindcssAnimate],
 } satisfies Config;

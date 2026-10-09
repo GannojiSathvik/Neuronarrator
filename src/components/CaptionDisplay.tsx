@@ -14,13 +14,11 @@ interface CaptionDisplayProps {
 function sanitizeCaption(raw: string): string {
   if (!raw) return "";
   if (raw.trim().startsWith("{") || raw.includes('"description"')) {
-    try {
-      const cleaned = raw.replace(/<\|[^|]*\|>/g, "").replace(/\bassistant\b/g, "");
-      const match = cleaned.match(/"description"\s*:\s*"([^"]+)"/);
-      if (match) return match[1];
-    } catch {}
+    const cleaned = raw.replace(/<\|[^|]*\|>/g, "").replace(/\bassistant\b/g, "");
+    const match = cleaned.match(/"description"\s*:\s*"([^"]+)"/);
+    if (match) return match[1];
     return raw
-      .replace(/[{}":\[\]]/g, "")
+      .replace(/[{}":[\]]/g, "")
       .replace(/text_content|description|hazards|priority|found/g, "")
       .replace(/<\|[^|]*\|>/g, "")
       .replace(/\bassistant\b/g, "")
@@ -59,6 +57,7 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
   };
 
   return (
+    <div aria-live="polite" aria-atomic="true">
     <AnimatePresence>
       {isVisible && (hasDescription || hasTranscribedText) && (
         <motion.div
@@ -132,5 +131,6 @@ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mod
         </motion.div>
       )}
     </AnimatePresence>
+    </div>
   );
 };

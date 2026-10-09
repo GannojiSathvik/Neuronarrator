@@ -108,6 +108,20 @@ Rules:
 
 CRITICAL: Output ONLY the JSON object. No markdown, no backticks, no extra words.`;
 
+interface KnownFace {
+  name: string;
+  relation: string;
+  daysSinceLastSeen?: number;
+}
+
+interface VisionResult {
+  text_content: string;
+  description: string;
+  hazards: string[];
+  priority: number;
+  found?: boolean;
+}
+
 const buildFinderPrompt = (targetItem: string) => `You are helping a blind person find a specific item. The item they are looking for is: "${targetItem}".
 
 You MUST respond with ONLY valid JSON — no extra text before or after:
@@ -214,7 +228,7 @@ serve(async (req) => {
 
     // Add known faces context for general mode
     if (knownFaces.length > 0 && mode === "general") {
-      const faceLines = knownFaces.map((f: any) => {
+      const faceLines = knownFaces.map((f: KnownFace) => {
         let line = `${f.name} — ${f.relation}`;
         if (f.daysSinceLastSeen !== undefined && f.daysSinceLastSeen > 0) {
           if (f.daysSinceLastSeen === 1) line += ` (last seen yesterday)`;
@@ -285,7 +299,7 @@ serve(async (req) => {
         }
 
         const errorText = await res.text();
-        console.warn(`Model ${model} failed (${res.status}), trying next...`);
+        console.warn(`Model ${model} failed (${res.status}), trying next...`, errorText.slice(0, 200));
         lastError = `${model}: ${res.status}`;
       } catch (fetchErr) {
         console.warn(`Model ${model} fetch error:`, fetchErr);
@@ -410,13 +424,15 @@ serve(async (req) => {
       .replace(/<\|[^|]*\|>/g, "");
     
     // Parse JSON from response with multiple fallback strategies
-    let result: any = { text_content: "", description: "", hazards: [] as string[], priority: 5 };
+    let result: VisionResult = { text_content: "", description: "", hazards: [], priority: 5 };
     let parsed = false;
     
     try {
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        let jsonStr = jsonMatch[0]
+        const jsonStr = jsonMatch[0]
+          // Intentionally strip raw control characters that break JSON.parse
+          // eslint-disable-next-line no-control-regex
           .replace(/[\x00-\x1F\x7F]/g, " ")
           .replace(/,\s*}/g, "}")
           .replace(/,\s*]/g, "]");
@@ -447,7 +463,7 @@ serve(async (req) => {
         result.description = descMatch[1];
       } else {
         result.description = content
-          .replace(/[{}":\[\]]/g, "")
+          .replace(/[{}":[\]]/g, "")
           .replace(/text_content|description|hazards|priority|found/g, "")
           .replace(/\s+/g, " ")
           .trim()

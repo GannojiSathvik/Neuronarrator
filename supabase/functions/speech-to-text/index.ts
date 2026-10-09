@@ -37,9 +37,9 @@ serve(async (req) => {
     } catch {
       return badRequest("Request body must be valid JSON");
     }
-    const { audioBase64, language_code = "en-IN" } = body ?? {};
+    const { audioBase64, language_code = "en-IN", mime_type = "audio/webm" } = body ?? {};
 
-    if (!audioBase64) {
+    if (!audioBase64 || typeof audioBase64 !== "string") {
       return new Response(
         JSON.stringify({ error: "No audio data provided" }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -69,8 +69,10 @@ serve(async (req) => {
 
     // Create FormData with audio file
     const formData = new FormData();
-    const audioBlob = new Blob([bytes], { type: 'audio/webm' });
-    formData.append('file', audioBlob, 'recording.webm');
+    // Label the upload with the format the browser actually recorded (Safari records audio/mp4)
+    const isMp4 = typeof mime_type === 'string' && mime_type.startsWith('audio/mp4');
+    const audioBlob = new Blob([bytes], { type: isMp4 ? 'audio/mp4' : 'audio/webm' });
+    formData.append('file', audioBlob, isMp4 ? 'recording.mp4' : 'recording.webm');
     formData.append('model', 'saarika:v2.5');
     formData.append('language_code', language_code);
 

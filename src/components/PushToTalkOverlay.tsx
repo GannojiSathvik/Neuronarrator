@@ -36,9 +36,45 @@ export const PushToTalkOverlay = ({
     onTouchEnd();
   };
 
+  // Keyboard: Enter/Space starts the stream; once active, hold Enter/Space to talk
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    if (e.repeat) return;
+    if (!isActive) {
+      onStartStream();
+      return;
+    }
+    onTouchStart();
+  };
+
+  const handleKeyUp = (e: React.KeyboardEvent) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    if (isActive) onTouchEnd();
+  };
+
+  // Screen readers activate with a synthetic click (detail === 0) rather than touch/mouse events
+  const handleClick = (e: React.MouseEvent) => {
+    if (e.detail === 0 && !isActive) onStartStream();
+  };
+
   return (
     <div
       className="fixed inset-0 z-20"
+      role="button"
+      tabIndex={0}
+      aria-label={
+        !isActive
+          ? "Start NeuroNarrator"
+          : isListening
+          ? "Listening. Release to process command"
+          : "Hold to speak a command"
+      }
+      aria-pressed={isActive ? isListening : undefined}
+      onKeyDown={handleKeyDown}
+      onKeyUp={handleKeyUp}
+      onClick={handleClick}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
       onMouseDown={handleTouchStart}

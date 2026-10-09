@@ -1,5 +1,6 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { FunctionsHttpError } from "@supabase/supabase-js";
 
 interface SpeakOptions {
   priority?: number;
@@ -15,7 +16,7 @@ let audioCtxUnlocked = false;
 
 function getAudioContext(): AudioContext {
   if (!audioCtx) {
-    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
   return audioCtx;
 }
@@ -53,8 +54,8 @@ export const unlockAudioForMobile = (): Promise<void> => {
       source.buffer = buffer;
       source.connect(ctx.destination);
       source.start(0);
-    } catch (e) {
-      // ignore
+    } catch {
+      // ignore — best-effort unlock
     }
   });
 };
@@ -102,7 +103,7 @@ export const useNeuroVoice = () => {
     onEndCallbackRef.current = null;
     if (currentSourceRef.current) {
       currentSourceRef.current.onended = null;
-      try { currentSourceRef.current.stop(); } catch {}
+      try { currentSourceRef.current.stop(); } catch { /* already stopped */ }
       currentSourceRef.current = null;
     }
     window.speechSynthesis?.cancel();
@@ -149,7 +150,16 @@ export const useNeuroVoice = () => {
       }
 
       if (error) {
-        console.error("[TTS] Edge function error:", error);
+        // Non-2xx (429 rate limit, 504 timeout) arrives as FunctionsHttpError with data=null;
+        // read the JSON body from error.context so rateLimited/useBrowserFallback are visible.
+        const body = error instanceof FunctionsHttpError
+          ? await error.context.json().catch(() => null)
+          : null;
+        if (body?.rateLimited || body?.useBrowserFallback) {
+          console.warn("[TTS] Edge function asked for browser fallback:", body.error);
+        } else {
+          console.error("[TTS] Edge function error:", body?.error ?? error);
+        }
         throw error;
       }
 
@@ -253,6 +263,11 @@ export const useNeuroVoice = () => {
 
   const stop = useCallback(() => {
     stopCurrentAudio();
+  }, [stopCurrentAudio]);
+
+  // Stop any playing / pending speech when the component using this hook unmounts
+  useEffect(() => {
+    return () => stopCurrentAudio();
   }, [stopCurrentAudio]);
 
   const isSpeaking = useCallback(() => {

@@ -1,11 +1,9 @@
-import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { User, UserX, Brain, Loader2, UserPlus, Trash2, Clock, Users, Mic } from "lucide-react";
+import { User, UserX, Brain, Loader2, UserPlus, Clock, Users, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { FaceMatch } from "@/hooks/useFaceRecognition";
 import { FaceMemoryContext } from './FaceMemoryContext';
-import { confirmStep, CONFIRM_WINDOW_MS } from "@/lib/confirmWindow";
 
 interface FaceRecognitionOverlayProps {
   isModelsLoaded: boolean;
@@ -13,9 +11,10 @@ interface FaceRecognitionOverlayProps {
   modelLoadError: string | null;
   lastMatch: FaceMatch | null;
   hasUnknownFace: boolean;
-  storedFacesCount: number;
+  // Face management (counts, forgetting) lives in the Memory space, not on the camera screen
+  storedFacesCount?: number;
   onAddPerson: () => void;
-  onClearFaces: () => void;
+  onClearFaces?: () => void;
   onRetryModels?: () => void;
   isVisible: boolean;
   isVoiceListening?: boolean;
@@ -30,31 +29,13 @@ export const FaceRecognitionOverlay = ({
   modelLoadError,
   lastMatch,
   hasUnknownFace,
-  storedFacesCount,
   onAddPerson,
-  onClearFaces,
   onRetryModels,
   isVisible,
   isVoiceListening = false,
   lastVoiceCommand,
   hidePersonCard = false,
 }: FaceRecognitionOverlayProps) => {
-  // Forgetting faces is irreversible: the first tap arms, a second tap within the window clears
-  const [clearArmedAt, setClearArmedAt] = useState<number | null>(null);
-
-  // Revert the armed button once the confirmation window passes
-  useEffect(() => {
-    if (clearArmedAt === null) return;
-    const timeout = window.setTimeout(() => setClearArmedAt(null), CONFIRM_WINDOW_MS);
-    return () => window.clearTimeout(timeout);
-  }, [clearArmedAt]);
-
-  const handleClearPress = () => {
-    const { confirmed, armedAt } = confirmStep(clearArmedAt, Date.now());
-    setClearArmedAt(armedAt);
-    if (confirmed) onClearFaces();
-  };
-
   if (!isVisible) return null;
 
   return (
@@ -140,38 +121,6 @@ export const FaceRecognitionOverlay = ({
         )}
       </AnimatePresence>
 
-      {/* Stored Faces Count & Clear Button */}
-      <AnimatePresence>
-        {isModelsLoaded && storedFacesCount > 0 && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="rounded-2xl bg-black/55 backdrop-blur-md border border-white/15 flex items-center gap-1 pl-3 pr-1 py-1"
-          >
-            <p className="text-sm text-white/85">
-              {storedFacesCount} face{storedFacesCount !== 1 ? 's' : ''} in memory
-            </p>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleClearPress}
-              className={cn(
-                "text-sm hover:bg-white/10 hover:text-ios-red",
-                clearArmedAt !== null ? "text-ios-red" : "text-white/75"
-              )}
-            >
-              <Trash2 className="w-3 h-3 mr-1" />
-              {clearArmedAt !== null ? "Tap again to forget all faces" : "Forget faces"}
-            </Button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Kept mounted so screen readers announce the armed state when it appears */}
-      <p role="status" aria-live="polite" className="sr-only">
-        {clearArmedAt !== null ? "Tap again within 5 seconds to forget all faces" : ""}
-      </p>
     </div>
   );
 };

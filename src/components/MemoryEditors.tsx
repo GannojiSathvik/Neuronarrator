@@ -155,7 +155,13 @@ export function MemoryEditor({
           title,
           body,
           occurredAt: new Date(date),
-          source: usedDictation ? "dictation" : "note",
+          // An edited sample note stays a sample unless its text changed, so "Remove sample
+          // story" still removes it instead of keeping a fictional person as a real one.
+          source: usedDictation
+            ? "dictation"
+            : memory?.source === "sample" && body.trim() === memory.body
+              ? "sample"
+              : "note",
         },
         memory?.id,
       );

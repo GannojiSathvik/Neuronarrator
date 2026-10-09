@@ -153,8 +153,11 @@ export default function MemoryWorkspace() {
     speech.lang = "en-IN";
     speech.rate = 0.92;
     speech.onend = () => setReading(false);
-    speech.onerror = () => {
+    speech.onerror = (event) => {
       setReading(false);
+      // cancel() (Stop, switching person, a new read) reports "interrupted"/"canceled" in
+      // Chrome. That is the user's own action, not a failure worth an alert.
+      if (event.error === "interrupted" || event.error === "canceled") return;
       setActionError(
         "Read-aloud could not finish. Your note is still available below.",
       );
@@ -489,14 +492,17 @@ export default function MemoryWorkspace() {
                           </p>
                           <div className="reminder-footer">
                             <button
-                              onClick={() =>
-                                document
-                                  .getElementById(`memory-${reminder.id}`)
-                                  ?.scrollIntoView({
-                                    behavior: "smooth",
-                                    block: "center",
-                                  })
-                              }
+                              onClick={() => {
+                                const note = document.getElementById(
+                                  `memory-${reminder.id}`,
+                                );
+                                note?.scrollIntoView({
+                                  behavior: "smooth",
+                                  block: "center",
+                                });
+                                // Move keyboard and screen-reader focus too, not just the view.
+                                note?.focus({ preventScroll: true });
+                              }}
                             >
                               <span className="source-number">1</span>
                               {reminder.title}
@@ -577,6 +583,7 @@ export default function MemoryWorkspace() {
                         <article
                           id={`memory-${memory.id}`}
                           key={memory.id}
+                          tabIndex={-1}
                           className="timeline-item"
                         >
                           <span className="timeline-marker">

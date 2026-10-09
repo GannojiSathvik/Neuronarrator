@@ -152,8 +152,3 @@ The tests cover push-to-talk command parsing and face registration from a voice 
 - Currency phrases are matched before finder phrases, so "find my money" switches to currency mode.
 - `npm run lint` still reports issues in the original code (mostly `any` types and empty `catch` blocks).
 
-## Credits
-
-- **Concept:** Gannoji Sathvik came up with the NeuroNarrator idea.
-- **Original implementation:** G. Ronit Reddy ([Ronitreddy10/neuronarrator](https://github.com/Ronitreddy10/neuronarrator)). The app was built with Lovable, and most commits in that history were made by Lovable's bot.
-- **Later changes in this repository** (Gannoji Sathvik, with Claude as a coding assistant): fixed the lockfile so `npm ci` works, fixed saving a face from the "Neuro remember" voice command, made the camera and face-panel buttons clickable above the push-to-talk overlay, added Claude as a vision fallback, added input validation to the edge functions, and added unit tests.

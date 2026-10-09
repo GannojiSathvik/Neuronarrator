@@ -18,6 +18,8 @@ export interface TrackedFace {
 export function useFaceTracker(
   getVideo: () => HTMLVideoElement | null,
   enabled: boolean,
+  // True while the capture loop runs full recognition; the two would compete for the GPU.
+  isPaused: () => boolean = () => false,
 ): TrackedFace | null {
   const [face, setFace] = useState<TrackedFace | null>(null);
 
@@ -32,7 +34,7 @@ export function useFaceTracker(
 
     const tick = async () => {
       const video = getVideo();
-      if (video && video.readyState >= 2 && video.videoWidth > 0) {
+      if (!isPaused() && video && video.readyState >= 2 && video.videoWidth > 0) {
         try {
           const detection = await faceapi.detectSingleFace(video, TRACK_OPTIONS);
           if (cancelled) return;
@@ -60,7 +62,7 @@ export function useFaceTracker(
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [enabled, getVideo]);
+  }, [enabled, getVideo, isPaused]);
 
   return face;
 }

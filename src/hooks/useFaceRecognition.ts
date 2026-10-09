@@ -11,6 +11,26 @@ const SSD_OPTIONS = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.25 });
 // Fallback detector: TinyFaceDetector (better for angled/side faces)
 const TINY_OPTIONS = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
 
+// The first inference of each network compiles its GPU shaders, which took 4-12 s in testing and
+// landed on the user's first Describe. Run every network once on a blank frame while loading.
+async function warmUpModels(): Promise<void> {
+  const started = performance.now();
+  try {
+    const blank = document.createElement('canvas');
+    blank.width = 160;
+    blank.height = 160;
+    await faceapi.detectSingleFace(blank, SSD_OPTIONS);
+    await faceapi.detectSingleFace(blank, TINY_OPTIONS);
+    // No face on a blank frame, so call the landmark and descriptor networks directly.
+    await faceapi.detectFaceLandmarks(blank);
+    await faceapi.computeFaceDescriptor(blank);
+    console.log(`[Face] Models warmed up in ${Math.round(performance.now() - started)} ms`);
+  } catch (error) {
+    // Only a speed-up: recognition still works, just slower the first time.
+    console.warn('[Face] Warm-up skipped:', error);
+  }
+}
+
 // Min detection score to proceed with matching (reject garbage detections)
 const MIN_DETECTION_SCORE = 0.35;
 
@@ -159,6 +179,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
         await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
         await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
         console.log('[Face] All models loaded (SSD + TinyFace + Landmarks + Recognition)');
+        await warmUpModels();
         setIsModelsLoaded(true);
         setIsLoadingModels(false);
         setModelLoadError(null);

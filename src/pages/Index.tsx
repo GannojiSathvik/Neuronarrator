@@ -147,7 +147,17 @@ const Index = () => {
   // Follow the face a few times a second so the name and caption can sit beside it
   // instead of covering the view. General mode only: other modes aren't about people.
   const getVideoElement = useCallback(() => cameraRef.current?.getVideoElement() ?? null, []);
-  const trackedFace = useFaceTracker(getVideoElement, isAutoCapturing && isModelsLoaded && mode === "general");
+  const isTrackerPaused = useCallback(() => isAnalyzingRef.current, []);
+  const trackerEnabled = isAutoCapturing && isModelsLoaded && mode === "general";
+  const trackedFace = useFaceTracker(getVideoElement, trackerEnabled, isTrackerPaused);
+  // When the tracker has been running a moment and sees nobody, a capture can skip the slow full
+  // recognition step and send the photo straight away.
+  const trackedFaceRef = useRef(trackedFace);
+  trackedFaceRef.current = trackedFace;
+  const trackerSinceRef = useRef(0);
+  useEffect(() => {
+    trackerSinceRef.current = trackerEnabled ? Date.now() : 0;
+  }, [trackerEnabled]);
 
   // Keep ref in sync so handleVoiceRemember doesn't need lastUnknownDescriptor as a dep
   lastUnknownDescriptorRef.current = lastUnknownDescriptor;
@@ -373,7 +383,9 @@ const Index = () => {
       let knownFaces: KnownFaceInfo[] = [];
       let hasUnknownFace = false;
       let seenPersonId: number | undefined;
-      if (isModelsLoaded && mode === "general") {
+      const trackerSeesNobody =
+        trackerSinceRef.current > 0 && Date.now() - trackerSinceRef.current > 1500 && !trackedFaceRef.current;
+      if (isModelsLoaded && mode === "general" && !trackerSeesNobody) {
         const video = cameraRef.current?.getVideoElement();
         if (video && video.readyState >= 2) {
           try {

@@ -17,9 +17,6 @@ const MIN_DETECTION_SCORE = 0.35;
 // Match threshold — slightly relaxed for mobile camera conditions
 const MATCH_THRESHOLD = 0.55;
 
-// Descriptor blending: how much weight to give a new observation when updating stored descriptors
-const BLEND_ALPHA = 0.3;
-
 // Time thresholds for contextual announcements
 const DAYS_THRESHOLD = 3;
 
@@ -49,7 +46,11 @@ export interface UseFaceRecognitionReturn {
   isProcessing: boolean;
   storedFacesCount: number;
   detectAndMatch: (videoElement: HTMLVideoElement) => Promise<FaceMatch | null>;
-  registerCurrentFace: (name: string, relation: RelationType, descriptor?: Float32Array | null) => Promise<boolean>;
+  registerCurrentFace: (
+    name: string,
+    relation: RelationType,
+    options?: { descriptor?: Float32Array | null; personId?: number },
+  ) => Promise<boolean>;
   loadModels: () => Promise<void>;
   retryLoadModels: () => Promise<void>;
   refreshStoredFaces: () => Promise<void>;
@@ -88,15 +89,6 @@ function euclideanDistance(desc1: Float32Array, desc2: Float32Array): number {
   return Math.sqrt(sum);
 }
 
-// Blend two descriptors: result = (1-alpha)*existing + alpha*new
-function blendDescriptors(existing: Float32Array, fresh: Float32Array, alpha: number): Float32Array {
-  const blended = new Float32Array(existing.length);
-  for (let i = 0; i < existing.length; i++) {
-    blended[i] = (1 - alpha) * existing[i] + alpha * fresh[i];
-  }
-  return blended;
-}
-
 function daysBetween(date1: Date, date2: Date): number {
   const diffTime = Math.abs(date2.getTime() - date1.getTime());
   return Math.floor(diffTime / (1000 * 60 * 60 * 24));
@@ -125,20 +117,29 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
 
   const storedFacesRef = useRef<FaceRecord[]>([]);
   const isProcessingRef = useRef(false);
+  // Mirror of lastUnknownDescriptor so registerCurrentFace sees a descriptor set by a
+  // detectAndMatch call that completed in the same tick (before React re-renders)
+  const lastUnknownDescriptorRef = useRef<Float32Array | null>(null);
 
-  useEffect(() => {
-    refreshStoredFaces();
+  const updateLastUnknownDescriptor = useCallback((descriptor: Float32Array | null) => {
+    lastUnknownDescriptorRef.current = descriptor;
+    setLastUnknownDescriptor(descriptor);
   }, []);
 
   const refreshStoredFaces = useCallback(async () => {
     try {
       const faces = await faceDB.getAllFaces();
-      storedFacesRef.current = faces;
-      setStoredFacesCount(faces.length);
+      const enrolled = faces.filter(face => !!face.descriptor && !face.isSample);
+      storedFacesRef.current = enrolled;
+      setStoredFacesCount(enrolled.length);
     } catch (error) {
       console.error('[Face] Error loading stored faces:', error);
     }
   }, []);
+
+  useEffect(() => {
+    refreshStoredFaces();
+  }, [refreshStoredFaces]);
 
   // Load models sequentially with retry
   const loadModels = useCallback(async () => {
@@ -219,6 +220,8 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       if (!detections || detections.length === 0) {
         console.log('[Face] No faces detected by either detector');
         setLastMatch(null);
+        // Forget the previous stranger so "remember X" can't save an old face under a new name
+        updateLastUnknownDescriptor(null);
         return null;
       }
 
@@ -237,6 +240,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       if (score < MIN_DETECTION_SCORE) {
         console.log('[Face] Detection score too low, skipping match');
         setLastMatch(null);
+        updateLastUnknownDescriptor(null);
         return null;
       }
 
@@ -252,7 +256,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
           descriptor: currentDescriptor
         };
         setLastMatch(unknownMatch);
-        setLastUnknownDescriptor(currentDescriptor);
+        updateLastUnknownDescriptor(currentDescriptor);
         return unknownMatch;
       }
 
@@ -293,19 +297,12 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
           isLongAbsence: daysSinceLastSeen >= DAYS_THRESHOLD
         };
 
-        // Update lastSeen AND blend descriptors for adaptive matching
+        // Never train on an unconfirmed prediction: a false positive would corrupt enrollment.
         if (bestMatchRecord.id) {
-          const storedDesc = toFloat32Array(bestMatchRecord.descriptor);
-          if (storedDesc) {
-            const blended = blendDescriptors(storedDesc, currentDescriptor, BLEND_ALPHA);
-            faceDB.updateFaceDescriptorAndLastSeen(bestMatchRecord.id, blended).catch(err =>
-              console.error('[Face] Failed to update descriptor:', err)
-            );
-          } else {
-            faceDB.updateLastSeen(bestMatchRecord.id).catch(err =>
-              console.error('[Face] Failed to update lastSeen:', err)
-            );
-          }
+          // A failed timestamp write must not turn a successful match into "no face".
+          await faceDB.updateLastSeen(bestMatchRecord.id).catch(err =>
+            console.error('[Face] Failed to update lastSeen:', err)
+          );
         }
 
         const knownMatch: FaceMatch = {
@@ -316,9 +313,9 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
           context
         };
         setLastMatch(knownMatch);
-        setLastUnknownDescriptor(null);
+        updateLastUnknownDescriptor(null);
 
-        // Refresh faces so blended descriptor is available next cycle
+        // Refresh last-seen timestamps before the next cycle
         refreshStoredFaces();
 
         return knownMatch;
@@ -330,7 +327,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
           distance: bestDistance
         };
         setLastMatch(unknownMatch);
-        setLastUnknownDescriptor(currentDescriptor);
+        updateLastUnknownDescriptor(currentDescriptor);
         return unknownMatch;
       }
     } catch (error) {
@@ -340,26 +337,36 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       isProcessingRef.current = false;
       setIsProcessing(false);
     }
-  }, [isModelsLoaded, refreshStoredFaces]);
+  }, [isModelsLoaded, refreshStoredFaces, updateLastUnknownDescriptor]);
 
-  // Register the current unknown face. Callers that just ran detectAndMatch should pass the
-  // fresh descriptor explicitly: the lastUnknownDescriptor state set by that call is not yet
-  // visible inside this closure until the next render.
-  const registerCurrentFace = useCallback(async (name: string, relation: RelationType, descriptor?: Float32Array | null): Promise<boolean> => {
-    const descriptorToSave = descriptor ?? lastUnknownDescriptor;
-    if (!descriptorToSave) {
+  // Register the current unknown face. A caller that already holds a fresh descriptor (e.g. the
+  // "Neuro remember <name>" path straight after detectAndMatch) can pass it explicitly; otherwise
+  // the ref mirror is used, which already reflects a detectAndMatch that finished this tick.
+  // With personId, the face is enrolled onto that existing Memory-space person instead of
+  // creating a new record.
+  const registerCurrentFace = useCallback(async (
+    name: string,
+    relation: RelationType,
+    options?: { descriptor?: Float32Array | null; personId?: number },
+  ): Promise<boolean> => {
+    const descriptor = options?.descriptor ?? lastUnknownDescriptorRef.current;
+    const personId = options?.personId;
+    if (!descriptor) {
       console.warn('[Face] No unknown face to register');
       return false;
     }
 
     try {
       // Store as a plain Array for reliable IndexedDB serialization
-      await faceDB.addFace(name.trim(), descriptorToSave, relation);
+      const id = personId !== undefined
+        ? await faceDB.enrollFace(personId, descriptor)
+        : await faceDB.addFace(name.trim(), descriptor, relation);
       await refreshStoredFaces();
-      setLastUnknownDescriptor(null);
+      updateLastUnknownDescriptor(null);
 
       const now = new Date();
       setLastMatch({
+        id,
         name: name.trim(),
         known: true,
         context: {
@@ -377,18 +384,18 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       console.error('[Face] Error registering face:', error);
       return false;
     }
-  }, [lastUnknownDescriptor, refreshStoredFaces]);
+  }, [refreshStoredFaces, updateLastUnknownDescriptor]);
 
   const clearAllFaces = useCallback(async () => {
     try {
       await faceDB.clearAllFaces();
       await refreshStoredFaces();
       setLastMatch(null);
-      setLastUnknownDescriptor(null);
+      updateLastUnknownDescriptor(null);
     } catch (error) {
       console.error('[Face] Error clearing faces:', error);
     }
-  }, [refreshStoredFaces]);
+  }, [refreshStoredFaces, updateLastUnknownDescriptor]);
 
   const retryLoadModels = useCallback(async () => {
     setModelLoadError(null);

@@ -1,4 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { Link, useSearchParams } from 'react-router-dom';
+import { useMemoryLibrary } from '@/hooks/useMemoryLibrary';
 import { DynamicIsland } from "@/components/DynamicIsland";
 import { LiveCamera, type LiveCameraRef } from "@/components/LiveCamera";
 import { SettingsModal } from "@/components/SettingsModal";
@@ -18,12 +20,16 @@ import { useVoiceControl, type CommandMode } from "@/hooks/useVoiceControl";
 import { HapticBrailleIndicator } from "@/components/HapticBrailleIndicator";
 import { PushToTalkOverlay } from "@/components/PushToTalkOverlay";
 import { analyzeImage as analyzeImageService, type VisionMode, type KnownFaceInfo } from "@/services/vision";
-import { Settings } from "lucide-react";
+import { Settings, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 
 const Index = () => {
+  const [params] = useSearchParams();
+  const { people } = useMemoryLibrary();
+  const enrollmentPerson = people.find(person => person.id === Number(params.get('person')) && !person.isSample);
+  const [requestedName, setRequestedName] = useState('');
   const [analysisState, setAnalysisState] = useState<AnalysisState>("idle");
   const [isAutoCapturing, setIsAutoCapturing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -45,10 +51,16 @@ const Index = () => {
   // Bumped whenever a capture cycle starts or is abandoned (watchdog, stop). An async step
   // that finishes after its cycle was superseded must not speak or touch the loop flags.
   const analysisCycleRef = useRef(0);
+  const brailleTimerRef = useRef<number | null>(null);
+  const stopStreamRef = useRef<() => void>(() => {});
+  // While the add-person review or settings dialog is open, the capture loop must not speak
+  // over it or keep sending frames.
+  const modalOpenRef = useRef(false);
+  modalOpenRef.current = addPersonOpen || settingsOpen;
 
   // Unknown-face pause: suppress TTS for 5s so user can say "neuro remember [name]"
   const unknownFacePauseUntilRef = useRef<number>(0);
-  const lastUnknownDescriptorRef = useRef<any>(null);
+  const lastUnknownDescriptorRef = useRef<Float32Array | null>(null);
   const UNKNOWN_FACE_PAUSE_MS = 5000;
 
   const { speak, stop, isSpeaking, isBusy } = useNeuroVoice();
@@ -104,7 +116,7 @@ const Index = () => {
   // Kick the next capture
   const triggerNextCapture = useCallback(() => {
     speechStartedAtRef.current = 0;
-    if (isActiveRef.current && !isBusy()) {
+    if (isActiveRef.current && !modalOpenRef.current && !isBusy()) {
       setTimeout(() => {
         if (isActiveRef.current && !isAnalyzingRef.current) {
           setCaptureRequestId(prev => prev + 1);
@@ -131,48 +143,35 @@ const Index = () => {
     analysisStartedAtRef.current = 0;
   }, [mode, targetItem]);
 
-  // Voice command handler — truly hands-free
+  // Voice registration opens the same review/consent step as the visible Add control.
+  // If no stranger is cached yet, run a fresh detection first so the dialog has a face to
+  // save (otherwise "Neuro remember X" would open a dialog that can only fail).
   const handleVoiceRemember = useCallback(async (name: string) => {
     console.log("[VoiceRemember] Command received for:", name);
 
-    if (lastUnknownDescriptorRef.current) {
-      console.log("[VoiceRemember] Using existing unknown descriptor");
-      unknownFacePauseUntilRef.current = 0;
-      const success = await registerCurrentFace(name, "Friend", lastUnknownDescriptorRef.current);
-      if (success) {
-        speak(`Got it, I'll remember ${name}.`, 5, {});
-      } else {
-        speak(`Couldn't save that face. Try again.`, 5, {});
+    if (!lastUnknownDescriptorRef.current) {
+      const video = cameraRef.current?.getVideoElement();
+      if (!video || video.readyState < 2 || !isModelsLoaded) {
+        speak("I can't see anyone right now. Make sure the camera is on.", 5, {});
+        return;
       }
-      return;
-    }
 
-    const video = cameraRef.current?.getVideoElement();
-    if (!video || video.readyState < 2 || !isModelsLoaded) {
-      speak("I can't see anyone right now. Make sure the camera is on.", 5, {});
-      return;
-    }
-
-    console.log("[VoiceRemember] No cached descriptor, running fresh detection...");
-    const match = await detectAndMatch(video);
-    
-    if (!match || match.known) {
-      if (match?.known) {
-        speak(`I already know ${match.name}. No need to save again.`, 5, {});
-      } else {
-        speak("I don't see a face right now. Try facing the camera.", 5, {});
+      console.log("[VoiceRemember] No cached descriptor, running fresh detection...");
+      const match = await detectAndMatch(video);
+      if (!match || match.known) {
+        if (match?.known) {
+          speak(`I already know ${match.name}. No need to save again.`, 5, {});
+        } else {
+          speak("I don't see a face right now. Try facing the camera.", 5, {});
+        }
+        return;
       }
-      return;
     }
 
-    unknownFacePauseUntilRef.current = 0;
-    const success = await registerCurrentFace(name, "Friend", match.descriptor);
-    if (success) {
-      speak(`Got it, I'll remember ${name}.`, 5, {});
-    } else {
-      speak(`Couldn't save that face. Try again.`, 5, {});
-    }
-  }, [isModelsLoaded, detectAndMatch, registerCurrentFace, speak]);
+    setRequestedName(name);
+    setAddPersonOpen(true);
+    stop();
+  }, [isModelsLoaded, detectAndMatch, speak, stop]);
 
   const handleVoiceClear = useCallback(() => {
     clearAllFaces();
@@ -193,16 +192,22 @@ const Index = () => {
     }
     // Vibrate for confirmation
     if ("vibrate" in navigator) {
-      try { navigator.vibrate([100, 50, 100]); } catch {}
+      try { navigator.vibrate([100, 50, 100]); } catch { /* vibration unsupported */ }
     }
   }, [setCommandMode, setTargetItem, speak, onSpeechEnd]);
 
+  const handleVoiceStop = useCallback(() => {
+    stopStreamRef.current();
+    speak("Stopped. Tap anywhere to start again.", 5, {});
+  }, [speak]);
+
   // Always-on voice command listener (active when scanning, paused during push-to-talk)
-  const { isListening: isVoiceListening, lastCommand, forceRestart: forceRestartVoice } = useVoiceCommand({
+  const { isListening: isVoiceListening, lastCommand, forceRestart: forceRestartVoice, pause: pauseVoiceCommand } = useVoiceCommand({
     onRememberCommand: handleVoiceRemember,
     onClearCommand: handleVoiceClear,
+    onStopCommand: handleVoiceStop,
     onModeSwitch: handleModeSwitch,
-    enabled: isAutoCapturing && !isVoiceControlListening,
+    enabled: isAutoCapturing && !isVoiceControlListening && !addPersonOpen && !settingsOpen,
   });
 
   // Watchdog
@@ -216,6 +221,7 @@ const Index = () => {
     }
 
     watchdogTimerRef.current = window.setInterval(() => {
+      if (modalOpenRef.current) return;
       if (isAnalyzingRef.current && analysisStartedAtRef.current > 0) {
         const analysisDuration = Date.now() - analysisStartedAtRef.current;
         if (analysisDuration > 15000) {
@@ -253,13 +259,13 @@ const Index = () => {
   }, [isAutoCapturing, isBusy, isSpeaking, stop]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
-    if (isAnalyzingRef.current) return;
+    if (isAnalyzingRef.current || modalOpenRef.current || !isActiveRef.current) return;
     if (isBusy()) return;
     isAnalyzingRef.current = true;
     analysisStartedAtRef.current = Date.now();
     captureCountRef.current += 1;
     const cycle = ++analysisCycleRef.current;
-    const isStale = () => cycle !== analysisCycleRef.current || !isActiveRef.current;
+    const isStale = () => cycle !== analysisCycleRef.current || !isActiveRef.current || modalOpenRef.current;
 
     setAnalysisState("analyzing");
 
@@ -273,6 +279,7 @@ const Index = () => {
           try {
             const faceTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000));
             const match = await Promise.race([detectAndMatch(video), faceTimeout]);
+            if (isStale()) return;
             if (match) {
               if (match.known && match.context) {
                 knownFaces = [{
@@ -295,7 +302,10 @@ const Index = () => {
       // Unknown face pause (general mode only)
       if (hasUnknownFace && mode === "general") {
         const now = Date.now();
-        if (unknownFacePauseUntilRef.current === 0 || now > unknownFacePauseUntilRef.current) {
+        // Arm the pause once per unknown-face appearance. Re-arming on expiry (the old behaviour)
+        // meant the scene was never described while an unregistered face stayed in frame.
+        // The pause is reset to 0 once no unknown face is seen (below) or after a registration.
+        if (unknownFacePauseUntilRef.current === 0) {
           unknownFacePauseUntilRef.current = now + UNKNOWN_FACE_PAUSE_MS;
           console.log("[Loop] Unknown face detected — pausing TTS for 5s for voice registration");
           stop();
@@ -338,7 +348,7 @@ const Index = () => {
           playFoundPing();
           // Also vibrate on found
           if ("vibrate" in navigator) {
-            try { navigator.vibrate([200, 100, 200, 100, 200]); } catch {}
+            try { navigator.vibrate([200, 100, 200, 100, 200]); } catch { /* vibration unsupported */ }
           }
           speechStartedAtRef.current = Date.now();
           speak(result.description, 8, { onEnd: onSpeechEnd });
@@ -378,8 +388,14 @@ const Index = () => {
           playHazardSound(result.priority);
           speechStartedAtRef.current = Date.now();
           speak(`Warning! ${result.description}`, 10, { onEnd: onSpeechEnd });
-          const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
-          playHapticMessage(hazardWord);
+          // Braille the hazard name after the SOS pattern (~1.9s) — playHapticMessage calls
+          // vibrate(0), which would otherwise cancel the SOS vibration immediately.
+          const hazardWord = result.hazards[0] || result.description.split(" ").slice(0, 2).join(" ");
+          if (brailleTimerRef.current) window.clearTimeout(brailleTimerRef.current);
+          brailleTimerRef.current = window.setTimeout(() => {
+            brailleTimerRef.current = null;
+            if (isActiveRef.current) playHapticMessage(hazardWord);
+          }, 2000);
         } else {
           setAnalysisState("success");
           setShowWarning(false);
@@ -403,7 +419,7 @@ const Index = () => {
         analysisStartedAtRef.current = 0;
       }
     }
-  }, [speak, stop, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isBusy, forceRestartVoice]);
+  }, [speak, stop, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, isModelsLoaded, detectAndMatch, isBusy, forceRestartVoice]);
 
   const startStream = useCallback(() => {
     if (isAutoCapturing) return;
@@ -413,8 +429,6 @@ const Index = () => {
     unknownFacePauseUntilRef.current = 0;
 
     unlockAudioForMobile();
-
-    try { localStorage.setItem('neuro-autostart', 'true'); } catch {}
 
     setTimeout(() => {
       if (isActiveRef.current) {
@@ -427,9 +441,14 @@ const Index = () => {
 
   const stopStream = useCallback(() => {
     setIsAutoCapturing(false);
+    setCameraEnabled(false); // unmount the webcam so the camera actually turns off
     isActiveRef.current = false;
     analysisCycleRef.current += 1;
     isAnalyzingRef.current = false;
+    if (brailleTimerRef.current) {
+      window.clearTimeout(brailleTimerRef.current);
+      brailleTimerRef.current = null;
+    }
     captureCountRef.current = 0;
     speechStartedAtRef.current = 0;
     analysisStartedAtRef.current = 0;
@@ -442,6 +461,14 @@ const Index = () => {
     stop();
     stopHaptic();
   }, [stop, stopHaptic]);
+  stopStreamRef.current = stopStream;
+
+  // Clear the pending braille timer on unmount
+  useEffect(() => () => {
+    isActiveRef.current = false;
+    analysisCycleRef.current += 1;
+    if (brailleTimerRef.current) window.clearTimeout(brailleTimerRef.current);
+  }, []);
 
   const toggleAutoCapture = useCallback(() => {
     if (isAutoCapturing) {
@@ -451,22 +478,8 @@ const Index = () => {
     }
   }, [isAutoCapturing, startStream, stopStream]);
 
-  // Auto-start on mount if permissions were previously granted
-  useEffect(() => {
-    try {
-      const shouldAutoStart = localStorage.getItem('neuro-autostart') === 'true';
-      if (shouldAutoStart) {
-        console.log("[AutoStart] Previously granted permissions detected — auto-starting stream");
-        const timer = setTimeout(() => {
-          startStream();
-        }, 500);
-        return () => clearTimeout(timer);
-      }
-    } catch {}
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   const handleRegisterFace = async (name: string, relation: RelationType): Promise<boolean> => {
-    const success = await registerCurrentFace(name, relation);
+    const success = await registerCurrentFace(name, relation, { personId: enrollmentPerson?.id });
     if (success) {
       speak(`Face saved as ${name}, your ${relation.toLowerCase()}`, 5, {});
     }
@@ -482,8 +495,10 @@ const Index = () => {
   const handleTouchStart = useCallback(() => {
     if (!isAutoCapturing) return;
     playListeningChime();
+    // Release the always-on recognizer first — browsers allow only one active recognition session
+    pauseVoiceCommand();
     startVoiceControl();
-  }, [isAutoCapturing, playListeningChime, startVoiceControl]);
+  }, [isAutoCapturing, playListeningChime, pauseVoiceCommand, startVoiceControl]);
 
   const handleTouchEnd = useCallback(() => {
     stopVoiceControl();
@@ -538,7 +553,7 @@ const Index = () => {
         lastMatch={lastMatch}
         hasUnknownFace={!!lastUnknownDescriptor}
         storedFacesCount={storedFacesCount}
-        onAddPerson={() => setAddPersonOpen(true)}
+        onAddPerson={() => { setRequestedName(''); setAddPersonOpen(true); stop(); }}
         onClearFaces={handleClearFaces}
         onRetryModels={retryLoadModels}
         isVisible={isAutoCapturing || isLoadingModels || !!modelLoadError}
@@ -550,6 +565,14 @@ const Index = () => {
       <div className={`flex justify-center pt-4 pb-2 relative z-10 ${showWarning ? "mt-16" : ""}`}>
         <DynamicIsland status={analysisState} priority={priority} commandMode={commandMode} />
       </div>
+
+      <Link to="/" className="fixed bottom-5 left-4 z-30 flex items-center gap-2 rounded-full border border-white/20 bg-black/75 px-4 py-3 text-sm text-white"><BookOpen size={16} />Memory space</Link>
+      {!isAutoCapturing && <div className="fixed bottom-24 left-5 right-5 z-10 mx-auto max-w-xl rounded-2xl border border-white/15 bg-black/80 p-5 text-center">
+        <p className="text-lg font-medium mb-2">{enrollmentPerson ? `Connect a face to ${enrollmentPerson.name}` : 'Live vision & familiar faces'}</p>
+        <p className="text-sm text-white/70">Starting sends camera frames to the vision service and enables browser voice commands. Saved conversation notes stay on this device.</p>
+        {enrollmentPerson && <p className="mt-2 text-sm text-green-200">Have them face the camera, then choose Add to confirm and save.</p>}
+        <p className="mt-2 text-xs text-white/50">Assistive prototype. Do not rely on it for navigation or hazard safety.</p>
+      </div>}
 
       {/* Settings button — small, top-right corner */}
       <button
@@ -563,13 +586,25 @@ const Index = () => {
         <Settings className="w-5 h-5 text-muted-foreground" />
       </button>
 
-      {/* Status text */}
-      <div className="flex justify-center px-4 pt-2 relative z-10">
+      {/* Status text (+ Stop button while scanning; z-30 keeps it above the push-to-talk overlay) */}
+      <div className={cn("flex justify-center items-center gap-2 px-4 pt-2 relative", isAutoCapturing ? "z-30" : "z-10")}>
         <div className="glass-panel super-ellipse-sm px-4 py-2">
-          <p className="text-sm text-muted-foreground text-center tracking-tight">
+          <p className="text-sm text-muted-foreground text-center tracking-tight" role="status" aria-live="polite">
             {getStatusText()}
           </p>
         </div>
+        {isAutoCapturing && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              stopStream();
+            }}
+            className="glass-panel super-ellipse-sm px-4 py-2 text-sm font-semibold text-ios-red"
+            aria-label="Stop scanning"
+          >
+            Stop
+          </button>
+        )}
       </div>
 
       {/* Push-to-Talk Overlay — full screen touch target */}
@@ -607,6 +642,9 @@ const Index = () => {
         isOpen={addPersonOpen}
         onClose={() => setAddPersonOpen(false)}
         onSave={handleRegisterFace}
+        initialName={enrollmentPerson?.name ?? requestedName}
+        initialRelation={enrollmentPerson?.relation ?? 'Acquaintance'}
+        existingPerson={!!enrollmentPerson}
       />
     </div>
   );

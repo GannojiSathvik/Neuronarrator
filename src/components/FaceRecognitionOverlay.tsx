@@ -3,6 +3,7 @@ import { User, UserX, Brain, Loader2, UserPlus, Trash2, Clock, Users, Mic } from
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { FaceMatch } from "@/hooks/useFaceRecognition";
+import { FaceMemoryContext } from './FaceMemoryContext';
 
 interface FaceRecognitionOverlayProps {
   isModelsLoaded: boolean;
@@ -151,7 +152,7 @@ export const FaceRecognitionOverlay = ({
                       </p>
                     )}
                     <p className="text-xs text-muted-foreground">
-                      Confidence: {lastMatch.distance ? ((1 - lastMatch.distance) * 100).toFixed(0) : 100}%
+                      {lastMatch.distance !== undefined ? 'Possible face match — confirm their identity' : 'Face enrollment saved'}
                     </p>
                   </div>
                 ) : (
@@ -171,6 +172,7 @@ export const FaceRecognitionOverlay = ({
                 </Button>
               )}
             </div>
+            {lastMatch.known && lastMatch.id !== undefined && <FaceMemoryContext personId={lastMatch.id} />}
           </motion.div>
         )}
       </AnimatePresence>
@@ -194,7 +196,7 @@ export const FaceRecognitionOverlay = ({
               className="text-xs text-muted-foreground hover:text-ios-red"
             >
               <Trash2 className="w-3 h-3 mr-1" />
-              Clear All
+              Forget faces
             </Button>
           </motion.div>
         )}

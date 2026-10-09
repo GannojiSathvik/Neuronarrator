@@ -12,6 +12,7 @@ vi.mock("@/lib/faceDatabase", () => ({
   faceDB: {
     getAllFaces: vi.fn().mockResolvedValue([]),
     addFace: vi.fn().mockResolvedValue(1),
+    enrollFace: vi.fn().mockResolvedValue(7),
     clearAllFaces: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -22,6 +23,7 @@ import { useFaceRecognition } from "./useFaceRecognition";
 describe("useFaceRecognition.registerCurrentFace", () => {
   beforeEach(() => {
     vi.mocked(faceDB.addFace).mockClear();
+    vi.mocked(faceDB.enrollFace).mockClear();
   });
 
   it("saves an explicitly passed descriptor even when no unknown face is in state", async () => {
@@ -34,7 +36,7 @@ describe("useFaceRecognition.registerCurrentFace", () => {
     const descriptor = new Float32Array(128).fill(0.1);
     let success = false;
     await act(async () => {
-      success = await result.current.registerCurrentFace("  Ronit ", "Friend", descriptor);
+      success = await result.current.registerCurrentFace("  Ronit ", "Friend", { descriptor });
     });
 
     expect(success).toBe(true);
@@ -52,5 +54,21 @@ describe("useFaceRecognition.registerCurrentFace", () => {
 
     expect(success).toBe(false);
     expect(faceDB.addFace).not.toHaveBeenCalled();
+  });
+
+  it("enrolls the face onto an existing Memory-space person when personId is given", async () => {
+    const { result } = renderHook(() => useFaceRecognition());
+    await waitFor(() => expect(faceDB.getAllFaces).toHaveBeenCalled());
+
+    const descriptor = new Float32Array(128).fill(0.2);
+    let success = false;
+    await act(async () => {
+      success = await result.current.registerCurrentFace("Asha", "Family", { descriptor, personId: 7 });
+    });
+
+    expect(success).toBe(true);
+    expect(faceDB.enrollFace).toHaveBeenCalledWith(7, descriptor);
+    expect(faceDB.addFace).not.toHaveBeenCalled();
+    expect(result.current.lastMatch?.id).toBe(7);
   });
 });

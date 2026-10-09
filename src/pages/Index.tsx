@@ -11,6 +11,8 @@ import { AddPersonModal } from "@/components/AddPersonModal";
 import { FaceRecognitionOverlay, PersonCard } from "@/components/FaceRecognitionOverlay";
 import { FaceAnchoredPanel } from "@/components/FaceAnchoredPanel";
 import { useFaceTracker } from "@/hooks/useFaceTracker";
+import { useScreenSize } from "@/hooks/useScreenSize";
+import { facePanelWidth, videoBoxToScreen } from "@/lib/facePlacement";
 import { useNeuroVoice, unlockAudioForMobile } from "@/hooks/useNeuroVoice";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useHapticBraille } from "@/hooks/useHapticBraille";
@@ -150,6 +152,7 @@ const Index = () => {
   const isTrackerPaused = useCallback(() => isAnalyzingRef.current, []);
   const trackerEnabled = isAutoCapturing && isModelsLoaded && mode === "general";
   const trackedFace = useFaceTracker(getVideoElement, trackerEnabled, isTrackerPaused);
+  const screen = useScreenSize();
   // When the tracker has been running a moment and sees nobody, a capture can skip the slow full
   // recognition step and send the photo straight away.
   const trackedFaceRef = useRef(trackedFace);
@@ -875,7 +878,7 @@ const Index = () => {
 
       {/* Caption: beside the tracked face (with who it is), otherwise a small corner box */}
       {trackedFace ? (
-        <FaceAnchoredPanel face={trackedFace}>
+        <FaceAnchoredPanel faceBox={videoBoxToScreen(trackedFace.box, trackedFace.video, screen)} screen={screen} width={facePanelWidth(screen)}>
           {isModelsLoaded && lastMatch && (
             <PersonCard
               compact

@@ -180,35 +180,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
         )}
       />
 
-      {/* Analyzing indicator */}
-      <AnimatePresence>
-        {isAnalyzing && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute top-4 right-4 z-10 px-3 py-2 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center gap-2"
-          >
-            <Loader2 className="w-4 h-4 text-ios-blue animate-spin" />
-            <span className="text-xs font-medium text-muted-foreground">Reading...</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Recording indicator */}
-      <AnimatePresence>
-        {isAutoCapturing && !isAnalyzing && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute top-4 right-4 z-10 flex items-center gap-2 px-3 py-2 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border"
-          >
-            <div className="w-3 h-3 rounded-full bg-ios-red animate-pulse" />
-            <span className="text-xs font-medium text-foreground">LIVE</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* "Processing…" and the live/connection state are shown by the HUD's status pill */}
     </div>
 
     {/* Camera error overlay */}
@@ -242,12 +214,12 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
       onClick={flipCamera}
       disabled={isFlipping}
       className={cn(
-        "fixed top-4 left-4 z-30 w-12 h-12 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center justify-center tactile-button",
+        "fixed top-4 left-4 z-30 w-11 h-11 rounded-full bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white",
         isFlipping && "opacity-50"
       )}
       aria-label="Switch camera"
     >
-      <SwitchCamera className={cn("w-6 h-6 text-foreground", isFlipping && "animate-spin")} />
+      <SwitchCamera aria-hidden="true" className={cn("w-5 h-5 text-white", isFlipping && "motion-safe:animate-spin")} />
     </button>
  
     </>

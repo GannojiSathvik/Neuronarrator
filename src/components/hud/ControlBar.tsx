@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent, PointerEvent, SyntheticEvent } from "react";
+import { useRef, type KeyboardEvent, type MouseEvent, type PointerEvent, type SyntheticEvent } from "react";
 import { Loader2, Mic, Play, ScanEye, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CommandMode } from "@/hooks/useVoiceControl";
@@ -48,31 +48,45 @@ export function ControlBar({
   describeDisabled,
   onDescribeNow,
 }: ControlBarProps) {
+  // Whether this button started the current hold. Tracked here rather than read from
+  // isListening, which turns true only once the mic opens: a quick tap must still end the hold.
+  const holdingRef = useRef(false);
+  const startHold = () => {
+    if (holdingRef.current || !isActive) return;
+    holdingRef.current = true;
+    onMicStart();
+  };
+  const endHold = () => {
+    if (!holdingRef.current) return;
+    holdingRef.current = false;
+    onMicEnd();
+  };
+
   // Press and hold the mic like the full-screen push-to-talk. Pointer capture keeps the hold
   // alive if the finger slides off the button.
   const micDown = (event: PointerEvent<HTMLButtonElement>) => {
     event.stopPropagation();
-    if (!isActive || event.button !== 0) return;
+    if (event.button > 0) return; // primary button, touch or pen only
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    onMicStart();
+    startHold();
   };
   const micUp = (event: PointerEvent<HTMLButtonElement>) => {
     event.stopPropagation();
-    if (isListening) onMicEnd();
+    endHold();
   };
   // Keyboard: hold Space or Enter
   const micKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (event.key !== " " && event.key !== "Enter") return;
     event.preventDefault();
     event.stopPropagation();
-    if (!event.repeat && isActive && !isListening) onMicStart();
+    if (!event.repeat) startHold();
   };
   const micKeyUp = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (event.key !== " " && event.key !== "Enter") return;
     event.preventDefault();
     event.stopPropagation();
-    if (isListening) onMicEnd();
+    endHold();
   };
   // Screen readers activate with a synthetic click (detail 0) and can't hold: toggle instead
   const micClick = (event: MouseEvent<HTMLButtonElement>) => {
@@ -105,6 +119,7 @@ export function ControlBar({
           onPointerDown={micDown}
           onPointerUp={micUp}
           onPointerCancel={micUp}
+          onBlur={endHold}
           onKeyDown={micKeyDown}
           onKeyUp={micKeyUp}
           onClick={micClick}

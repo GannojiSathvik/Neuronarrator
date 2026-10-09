@@ -8,7 +8,9 @@ import { type RelationType } from "@/lib/faceDatabase";
 import { WarningBanner } from "@/components/WarningBanner";
 import { CaptionDisplay } from "@/components/CaptionDisplay";
 import { AddPersonModal } from "@/components/AddPersonModal";
-import { FaceRecognitionOverlay } from "@/components/FaceRecognitionOverlay";
+import { FaceRecognitionOverlay, PersonCard } from "@/components/FaceRecognitionOverlay";
+import { FaceAnchoredPanel } from "@/components/FaceAnchoredPanel";
+import { useFaceTracker } from "@/hooks/useFaceTracker";
 import { useNeuroVoice, unlockAudioForMobile } from "@/hooks/useNeuroVoice";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useHapticBraille } from "@/hooks/useHapticBraille";
@@ -136,6 +138,11 @@ const Index = () => {
     clearAllFaces,
     generateSpeechText
   } = useFaceRecognition();
+
+  // Follow the face a few times a second so the name and caption can sit beside it
+  // instead of covering the view. General mode only: other modes aren't about people.
+  const getVideoElement = useCallback(() => cameraRef.current?.getVideoElement() ?? null, []);
+  const trackedFace = useFaceTracker(getVideoElement, isAutoCapturing && isModelsLoaded && mode === "general");
 
   // Keep ref in sync so handleVoiceRemember doesn't need lastUnknownDescriptor as a dep
   lastUnknownDescriptorRef.current = lastUnknownDescriptor;
@@ -728,6 +735,21 @@ const Index = () => {
     return "Touch anywhere to start";
   };
 
+  const handleAddPerson = () => { setRequestedName(''); setLinkToPerson(true); setAddPersonOpen(true); stop(); };
+
+  const captionProps = {
+    text: captionText,
+    textContent,
+    isVisible: analysisState === "success" || analysisState === "warning" || analysisState === "error",
+    priority,
+    mode,
+    // While auto-capturing the app speaks every result aloud, so a polite live region would make
+    // TalkBack/VoiceOver read each caption a second time over the TTS. Captions are only announced
+    // when the app isn't narrating; errors are always announced via the caption's alert region.
+    announce: !isAutoCapturing,
+    isError: analysisState === "error",
+  };
+
   return (
     <div className={cn("min-h-screen bg-background flex flex-col relative", getModeBorderClass())}>
       {/* Live Camera Background */}
@@ -753,12 +775,13 @@ const Index = () => {
         lastMatch={lastMatch}
         hasUnknownFace={!!lastUnknownDescriptor}
         storedFacesCount={storedFacesCount}
-        onAddPerson={() => { setRequestedName(''); setLinkToPerson(true); setAddPersonOpen(true); stop(); }}
+        onAddPerson={handleAddPerson}
         onClearFaces={handleClearFaces}
         onRetryModels={retryLoadModels}
         isVisible={isAutoCapturing || isLoadingModels || !!modelLoadError}
         isVoiceListening={isVoiceListening}
         lastVoiceCommand={lastCommand}
+        hidePersonCard={!!trackedFace}
       />
 
       {/* Dynamic Island */}
@@ -832,19 +855,22 @@ const Index = () => {
         commandMode={commandMode}
       />
 
-      {/* Caption Display */}
-      <CaptionDisplay
-        text={captionText}
-        textContent={textContent}
-        isVisible={analysisState === "success" || analysisState === "warning" || analysisState === "error"}
-        priority={priority}
-        mode={mode}
-        // While auto-capturing the app speaks every result aloud, so a polite live region would make
-        // TalkBack/VoiceOver read each caption a second time over the TTS. Captions are only announced
-        // when the app isn't narrating; errors are always announced via the caption's alert region.
-        announce={!isAutoCapturing}
-        isError={analysisState === "error"}
-      />
+      {/* Caption: beside the tracked face (with who it is), otherwise a small corner box */}
+      {trackedFace ? (
+        <FaceAnchoredPanel face={trackedFace}>
+          {isModelsLoaded && lastMatch && (
+            <PersonCard
+              compact
+              match={lastMatch}
+              hasUnknownFace={!!lastUnknownDescriptor}
+              onAddPerson={handleAddPerson}
+            />
+          )}
+          <CaptionDisplay placement="inline" {...captionProps} />
+        </FaceAnchoredPanel>
+      ) : (
+        <CaptionDisplay placement="corner" {...captionProps} />
+      )}
 
       {/* Haptic Braille Indicator */}
       <HapticBrailleIndicator

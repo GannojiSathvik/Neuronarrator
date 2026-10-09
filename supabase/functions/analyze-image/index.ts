@@ -87,7 +87,7 @@ You MUST respond with ONLY valid JSON — no extra text before or after:
 {"text_content":"Read all visible text naturally. Signs, labels, screens, books — in logical order.","description":"Quick context like 'Looks like a menu' or 'There's a sign on the wall'","hazards":[],"priority":1}
 
 How to read:
-- Quick context first: "This says..." or "Looks like a label, it reads..."
+- Put the quick context ONLY in "description" ("Looks like a menu", "A label on a bottle"). "text_content" is just the text itself, read naturally, without repeating that context.
 - Read naturally: "twelve bucks" not "$12.00"
 - Dates: "March 15th" not "03/15"
 - No text? Just say "No text here, just [quick scene]"

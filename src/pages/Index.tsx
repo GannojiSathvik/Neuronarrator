@@ -22,6 +22,7 @@ import { PushToTalkOverlay } from "@/components/PushToTalkOverlay";
 import { analyzeImage as analyzeImageService, type VisionMode, type KnownFaceInfo } from "@/services/vision";
 import { Settings, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { readerSpeech } from "@/lib/readerSpeech";
 import { confirmStep } from "@/lib/confirmWindow";
 
 type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
@@ -393,9 +394,7 @@ const Index = () => {
       // Handle reader mode: short context ("Looks like a menu"), then the text itself.
       // With no text, the description alone says so ("No text here, just ...").
       else if (mode === "reader") {
-        const speechText = result.text_content
-          ? [result.description, result.text_content].filter(Boolean).join(" ")
-          : result.description;
+        const speechText = readerSpeech(result.description, result.text_content);
         setAnalysisState("success");
         setShowWarning(false);
         speechStartedAtRef.current = Date.now();

@@ -34,6 +34,7 @@ import { buildHudFromDemo, buildHudFromReal, hazardBannerText, type HudHazard, t
 import { connectionReducer, INITIAL_CONNECTION, isConnected } from "@/lib/connectionStatus";
 import { DEMO_CAPTIONS, readDemoMode, writeDemoMode } from "@/lib/demoSchedule";
 import { shouldSpeakMemory } from "@/lib/memoryRepeat";
+import { joinReminders, pickReminderPeople, toKnownFaces, unknownFaceCaption, unknownFacePrompt } from "@/lib/multiFace";
 
 type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 
@@ -83,8 +84,7 @@ const Index = () => {
   const unknownFacePauseUntilRef = useRef<number>(0);
   const lastUnknownDescriptorRef = useRef<Float32Array | null>(null);
   const UNKNOWN_FACE_PAUSE_MS = 5000;
-  // Spoken once per unknown-face appearance: a blind user can't read the caption.
-  const UNKNOWN_FACE_PROMPT = "There's someone I don't know in front of you. To save them, say neuro remember and their name.";
+  // Spoken once per unknown-face appearance (see unknownFacePrompt): a blind user can't read the caption.
 
   // Auto-describe off (the default): describe only when asked. Hazards are only detected during
   // a capture, so in this mode there are no continuous hazard alerts between requests.
@@ -156,9 +156,10 @@ const Index = () => {
     isLoadingModels,
     modelLoadError,
     lastMatch,
+    lastMatches,
     lastUnknownDescriptor,
     storedFacesCount,
-    detectAndMatch,
+    detectAndMatchAll,
     registerCurrentFace,
     loadModels,
     retryLoadModels,
@@ -166,17 +167,17 @@ const Index = () => {
     generateSpeechText
   } = useFaceRecognition();
 
-  // Follow the face a few times a second so the name and caption can sit beside it
-  // instead of covering the view. General mode only: other modes aren't about people.
+  // Follow every face (up to 4) a few times a second so each name and memory can sit beside its
+  // person instead of covering the view. General mode only: other modes aren't about people.
   const getVideoElement = useCallback(() => cameraRef.current?.getVideoElement() ?? null, []);
   const isTrackerPaused = useCallback(() => isAnalyzingRef.current, []);
   const trackerEnabled = isAutoCapturing && isModelsLoaded && mode === "general" && !demoMode;
-  const trackedFace = useFaceTracker(getVideoElement, trackerEnabled, isTrackerPaused);
+  const trackedFaces = useFaceTracker(getVideoElement, trackerEnabled, isTrackerPaused);
   const screen = useScreenSize();
   // When the tracker has been running a moment and sees nobody, a capture can skip the slow full
   // recognition step and send the photo straight away.
-  const trackedFaceRef = useRef(trackedFace);
-  trackedFaceRef.current = trackedFace;
+  const trackedFacesRef = useRef(trackedFaces);
+  trackedFacesRef.current = trackedFaces;
   const trackerSinceRef = useRef(0);
   useEffect(() => {
     trackerSinceRef.current = trackerEnabled ? Date.now() : 0;
@@ -272,10 +273,12 @@ const Index = () => {
       }
 
       console.log("[VoiceRemember] No cached descriptor, running fresh detection...");
-      const match = await detectAndMatch(video);
-      if (!match || match.known) {
-        if (match?.known) {
-          speak(`I already know ${match.name}. No need to save again.`, 5, {});
+      // With several people in view, the nearest stranger is the one saved
+      const matches = await detectAndMatchAll(video);
+      if (!matches?.some(match => !match.known)) {
+        const known = matches?.find(match => match.known);
+        if (known) {
+          speak(`I already know ${known.name}. No need to save again.`, 5, {});
         } else {
           speak("I don't see a face right now. Try facing the camera.", 5, {});
         }
@@ -287,7 +290,7 @@ const Index = () => {
     setLinkToPerson(false);
     setAddPersonOpen(true);
     stop();
-  }, [isModelsLoaded, detectAndMatch, speak, stop]);
+  }, [isModelsLoaded, detectAndMatchAll, speak, stop]);
 
   // When "neuro forget all" was last heard; a misheard phrase must not wipe every face, so it takes two
   const voiceClearArmedAtRef = useRef<number | null>(null);
@@ -417,15 +420,8 @@ const Index = () => {
     setCaptionText(`You asked: ${question}`);
     setTextContent("");
     speak("Let me look.", 6, {});
-    // If a face was just recognised, tell the AI who it is so "who is this?" can be answered
-    const knownFaces: KnownFaceInfo[] = lastMatch?.known && lastMatch.context
-      ? [{
-          name: lastMatch.context.name,
-          relation: lastMatch.context.relation,
-          daysSinceLastSeen: lastMatch.context.daysSinceLastSeen,
-          isLongAbsence: lastMatch.context.isLongAbsence,
-        }]
-      : [];
+    // If faces were just recognised, tell the AI who they are so "who is this?" can be answered
+    const knownFaces: KnownFaceInfo[] = toKnownFaces(lastMatches);
     try {
       const result = await analyzeImageService(frame, "general", knownFaces, "", "", question);
       dispatchConnection("success");
@@ -448,7 +444,7 @@ const Index = () => {
         analysisStartedAtRef.current = 0;
       }
     }
-  }, [speak, lastMatch, onSpeechEnd]);
+  }, [speak, lastMatches, onSpeechEnd]);
   askQuestionRef.current = askQuestion;
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
@@ -465,32 +461,30 @@ const Index = () => {
     requestedCaptureRef.current = false;
 
     setAnalysisState("analyzing");
+    // Set when a stranger is announced together with the narration (see below)
+    let unknownPrompt = "";
 
     try {
-      // Face detection (only for general mode)
+      // Face detection (only for general mode). Every face in view: all recognised people go to
+      // the vision AI, and strangers are counted for the announcement.
       let knownFaces: KnownFaceInfo[] = [];
-      let hasUnknownFace = false;
-      let seenPersonId: number | undefined;
+      let unknownCount = 0;
+      // Recognised people in view, most prominent first: id → name
+      const seenPeople = new Map<number, string>();
       const trackerSeesNobody =
-        trackerSinceRef.current > 0 && Date.now() - trackerSinceRef.current > 1500 && !trackedFaceRef.current;
+        trackerSinceRef.current > 0 && Date.now() - trackerSinceRef.current > 1500 && trackedFacesRef.current.length === 0;
       if (isModelsLoaded && mode === "general" && !trackerSeesNobody) {
         const video = cameraRef.current?.getVideoElement();
         if (video && video.readyState >= 2) {
           try {
             const faceTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000));
-            const match = await Promise.race([detectAndMatch(video), faceTimeout]);
+            const matches = await Promise.race([detectAndMatchAll(video), faceTimeout]);
             if (isStale()) return;
-            if (match) {
-              if (match.known && match.context) {
-                knownFaces = [{
-                  name: match.context.name,
-                  relation: match.context.relation,
-                  daysSinceLastSeen: match.context.daysSinceLastSeen,
-                  isLongAbsence: match.context.isLongAbsence,
-                }];
-                seenPersonId = match.id;
-              } else if (!match.known) {
-                hasUnknownFace = true;
+            if (matches) {
+              knownFaces = toKnownFaces(matches);
+              unknownCount = matches.filter(match => !match.known).length;
+              for (const match of matches) {
+                if (match.known && match.id !== undefined) seenPeople.set(match.id, match.name);
               }
             }
           } catch (faceErr) {
@@ -500,8 +494,9 @@ const Index = () => {
       }
       if (isStale()) return;
 
-      // Unknown face pause (general mode only)
-      if (hasUnknownFace && mode === "general") {
+      // Unknown face pause (general mode only). With recognised people also in view the prompt is
+      // said before the narration instead of replacing it, and nothing is held back for it.
+      if (unknownCount > 0 && mode === "general") {
         const now = Date.now();
         // Arm the pause once per unknown-face appearance. Re-arming on expiry (the old behaviour)
         // meant the scene was never described while an unregistered face stayed in frame.
@@ -515,21 +510,28 @@ const Index = () => {
         };
         if (unknownFacePauseUntilRef.current === 0) {
           unknownFacePauseUntilRef.current = Infinity;
-          console.log("[Loop] Unknown face detected — announcing, then pausing TTS for 5s for voice registration");
-          setAnalysisState("success");
-          setCaptionText("Unknown face detected — say \"Neuro remember [name]\" to save");
           // The prompt itself says "neuro remember"; keep the command listener from hearing it
           pauseVoiceCommand();
-          speechStartedAtRef.current = Date.now();
-          speak(UNKNOWN_FACE_PROMPT, 5, { onEnd: () => { startAnswerWindow(); onSpeechEnd(); } });
-          return;
+          if (knownFaces.length > 0) {
+            console.log("[Loop] Unknown face next to known people — announcing it before the narration");
+            unknownPrompt = unknownFacePrompt(unknownCount);
+          } else {
+            console.log("[Loop] Unknown face detected — announcing, then pausing TTS for 5s for voice registration");
+            setAnalysisState("success");
+            setCaptionText(unknownFaceCaption(unknownCount));
+            speechStartedAtRef.current = Date.now();
+            speak(unknownFacePrompt(unknownCount), 5, { onEnd: () => { startAnswerWindow(); onSpeechEnd(); } });
+            return;
+          }
+        } else {
+          startAnswerWindow();
         }
-        startAnswerWindow();
 
-        // An explicit request (Describe, a mode switch) is answered even inside the window
-        if (!requested && now < unknownFacePauseUntilRef.current) {
+        // An explicit request (Describe, a mode switch) is answered even inside the window, and
+        // so are the known people next to the stranger
+        if (!requested && knownFaces.length === 0 && now < unknownFacePauseUntilRef.current) {
           setAnalysisState("success");
-          setCaptionText("Unknown face detected — say \"Neuro remember [name]\" to save");
+          setCaptionText(unknownFaceCaption(unknownCount));
           isAnalyzingRef.current = false;
           analysisStartedAtRef.current = 0;
           if (shouldAutoContinue(mode, autoDescribeRef.current)) {
@@ -545,22 +547,20 @@ const Index = () => {
         unknownFacePauseUntilRef.current = 0;
       }
 
-      // A familiar face's latest memory note is spoken once per appearance. Look it up while the
-      // vision request runs.
+      // Each familiar face's latest memory note is spoken once per appearance, at most two people
+      // per capture (the rest get theirs next time). Look them up while the vision request runs.
       const seenAt = Date.now();
       announcedPeopleRef.current.forEach((lastSeen, id) => {
         if (seenAt - lastSeen >= PERSON_ABSENCE_RESET_MS) announcedPeopleRef.current.delete(id);
       });
-      let reminderLookup: Promise<string> | null = null;
-      if (seenPersonId !== undefined) {
-        if (announcedPeopleRef.current.has(seenPersonId)) {
-          announcedPeopleRef.current.set(seenPersonId, seenAt);
-        } else {
-          reminderLookup = memoryRepository.latestMemory(seenPersonId)
+      const { lookup: reminderIds, refresh } = pickReminderPeople([...seenPeople.keys()], announcedPeopleRef.current);
+      refresh.forEach(id => announcedPeopleRef.current.set(id, seenAt));
+      const reminderLookup: Promise<{ id: number; name: string; sentence: string }[]> | null = reminderIds.length
+        ? Promise.all(reminderIds.map(id => memoryRepository.latestMemory(id)
             .then(memory => (memory ? lastTimeSentence(memory.body) : ""))
-            .catch(() => "");
-        }
-      }
+            .catch(() => "")
+            .then(sentence => ({ id, name: seenPeople.get(id) ?? "", sentence }))))
+        : null;
 
       // Send image to vision API with mode + targetItem
       let result: VisionResponse;
@@ -571,15 +571,16 @@ const Index = () => {
         dispatchConnection("failure");
         throw analyzeError;
       }
-      const reminder = reminderLookup ? await reminderLookup : "";
+      const reminders = reminderLookup ? await reminderLookup : [];
       if (isStale()) {
         console.log("[Loop] Discarding result from an abandoned capture cycle");
         return;
       }
       // Nothing to remind them of: don't look again for this appearance
-      if (reminderLookup && !reminder && seenPersonId !== undefined) {
-        announcedPeopleRef.current.set(seenPersonId, Date.now());
-      }
+      reminders.forEach(({ id, sentence }) => {
+        if (!sentence) announcedPeopleRef.current.set(id, Date.now());
+      });
+      const reminder = joinReminders(reminders, seenPeople.size > 1);
 
       // Unchanged-scene check. Never for an answer the user asked for; hazards and a found item
       // skip it below because they are always spoken.
@@ -664,6 +665,11 @@ const Index = () => {
           : result.description;
 
         if (result.priority > 7) {
+          // A hazard comes first: the stranger is announced on a later capture instead
+          if (unknownPrompt) {
+            unknownFacePauseUntilRef.current = 0;
+            forceRestartVoice();
+          }
           setAnalysisState("warning");
           setHazard({ text: hazardBannerText(result.hazards, result.description), at: Date.now() });
           sosPattern();
@@ -681,19 +687,36 @@ const Index = () => {
             if (isActiveRef.current) playHapticMessage(hazardWord);
           }, 2000);
         } else {
-          // A pending memory reminder is news even when the scene isn't
-          if (!reminder && isRepeat(speechText)) return stayQuiet();
+          // A pending memory reminder or stranger announcement is news even when the scene isn't
+          if (!reminder && !unknownPrompt && isRepeat(speechText)) return stayQuiet();
           setAnalysisState("success");
           playHazardSound(result.priority);
           rememberSpoken(speechText);
-          if (reminder && seenPersonId !== undefined) announcedPeopleRef.current.set(seenPersonId, Date.now());
+          reminders.forEach(({ id, sentence }) => {
+            if (sentence) announcedPeopleRef.current.set(id, Date.now());
+          });
           speechStartedAtRef.current = Date.now();
-          speak(reminder ? `${speechText} ${reminder}` : speechText, 5, { onEnd: onSpeechEnd });
+          // The stranger prompt opens the "neuro remember" answer window once it has been said
+          const onEnd = unknownPrompt
+            ? () => {
+                if (unknownFacePauseUntilRef.current === Infinity) {
+                  unknownFacePauseUntilRef.current = Date.now() + UNKNOWN_FACE_PAUSE_MS;
+                  forceRestartVoice();
+                }
+                onSpeechEnd();
+              }
+            : onSpeechEnd;
+          speak([unknownPrompt, speechText, reminder].filter(Boolean).join(" "), 5, { onEnd });
         }
       }
     } catch (error) {
       if (isStale()) return;
       console.error("Analysis error:", error);
+      // The stranger wasn't announced after all: do it on the next capture
+      if (unknownPrompt) {
+        unknownFacePauseUntilRef.current = 0;
+        forceRestartVoice();
+      }
       setAnalysisState("error");
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
       setCaptionText(errorMsg);
@@ -710,7 +733,7 @@ const Index = () => {
         analysisStartedAtRef.current = 0;
       }
     }
-  }, [speak, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, isModelsLoaded, detectAndMatch, isBusy, forceRestartVoice, pauseVoiceCommand]);
+  }, [speak, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, isModelsLoaded, detectAndMatchAll, isBusy, forceRestartVoice, pauseVoiceCommand]);
 
   const startStream = useCallback(() => {
     if (isAutoCapturing) return;
@@ -886,20 +909,30 @@ const Index = () => {
   const handleAddPerson = () => { setRequestedName(''); setLinkToPerson(true); setAddPersonOpen(true); stop(); };
 
   // One view-model for the HUD, from the demo timeline or from real data (see src/lib/hudState).
-  const latestMemory = lastMatch?.known && lastMatch.id !== undefined
-    ? memories.find(memory => memory.personId === lastMatch.id) // newest first
-    : undefined;
+  // Each recognised person's latest note (memories are newest first)
+  const latestMemoryOf = (personId: number | undefined) =>
+    personId === undefined ? undefined : memories.find(memory => memory.personId === personId);
   const captionVisible = analysisState === "success" || analysisState === "warning" || analysisState === "error";
   const hud: HudState = demoActive
     ? buildHudFromDemo(demo, screen)
     : buildHudFromReal({
-        trackedFace,
+        trackedFaces,
         mirrored: cameraRef.current?.isMirrored() ?? false,
-        match: isModelsLoaded && lastMatch
-          ? { known: lastMatch.known, name: lastMatch.name, id: lastMatch.id, relation: lastMatch.context?.relation }
-          : null,
-        canEnroll: !!lastUnknownDescriptor,
-        memory: latestMemory ? memoryExcerpt(latestMemory.body, 160) : undefined,
+        matches: isModelsLoaded
+          ? lastMatches.map(match => {
+              const latest = match.known ? latestMemoryOf(match.id) : undefined;
+              return {
+                known: match.known,
+                name: match.name,
+                id: match.id,
+                relation: match.context?.relation,
+                memory: latest ? memoryExcerpt(latest.body, 160) : undefined,
+                box: match.box,
+                // Add saves the cached stranger, so only their tag offers it
+                canEnroll: !match.known && !!lastUnknownDescriptor && match.descriptor === lastUnknownDescriptor,
+              };
+            })
+          : [],
         screen,
         caption: captionVisible && (captionText || textContent)
           ? { text: captionText, textContent, isError: analysisState === "error" }

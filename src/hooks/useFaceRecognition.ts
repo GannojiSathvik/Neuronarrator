@@ -1,6 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import * as faceapi from 'face-api.js';
 import { faceDB, type FaceRecord, type RelationType } from '@/lib/faceDatabase';
+import type { Rect } from '@/lib/facePlacement';
+import { assignIdentities } from '@/lib/faceIdentity';
+import { pickProminent } from '@/lib/faceTracks';
 
 // Model CDN URL
 const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
@@ -34,9 +37,6 @@ async function warmUpModels(): Promise<void> {
 // Min detection score to proceed with matching (reject garbage detections)
 const MIN_DETECTION_SCORE = 0.35;
 
-// Match threshold — slightly relaxed for mobile camera conditions
-const MATCH_THRESHOLD = 0.55;
-
 // Time thresholds for contextual announcements
 const DAYS_THRESHOLD = 3;
 
@@ -55,17 +55,23 @@ export interface FaceMatch {
   distance?: number;
   id?: number;
   context?: FaceContext;
+  /** Where the face is, in the video's own pixels (joins it to a tracked box for the HUD). */
+  box?: Rect;
 }
 
 export interface UseFaceRecognitionReturn {
   isModelsLoaded: boolean;
   isLoadingModels: boolean;
   modelLoadError: string | null;
+  /** The most prominent face from the last recognition (kept for single-face callers). */
   lastMatch: FaceMatch | null;
+  /** Every face from the last recognition, most prominent first. */
+  lastMatches: FaceMatch[];
   lastUnknownDescriptor: Float32Array | null;
   isProcessing: boolean;
   storedFacesCount: number;
   detectAndMatch: (videoElement: HTMLVideoElement) => Promise<FaceMatch | null>;
+  detectAndMatchAll: (videoElement: HTMLVideoElement) => Promise<FaceMatch[] | null>;
   registerCurrentFace: (
     name: string,
     relation: RelationType,
@@ -98,17 +104,6 @@ function toFloat32Array(data: unknown): Float32Array | null {
   return null;
 }
 
-// Calculate Euclidean distance between two descriptors
-function euclideanDistance(desc1: Float32Array, desc2: Float32Array): number {
-  if (desc1.length !== desc2.length) return Infinity;
-  let sum = 0;
-  for (let i = 0; i < desc1.length; i++) {
-    const diff = desc1[i] - desc2[i];
-    sum += diff * diff;
-  }
-  return Math.sqrt(sum);
-}
-
 function daysBetween(date1: Date, date2: Date): number {
   const diffTime = Math.abs(date2.getTime() - date1.getTime());
   return Math.floor(diffTime / (1000 * 60 * 60 * 24));
@@ -131,6 +126,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const [lastMatch, setLastMatch] = useState<FaceMatch | null>(null);
+  const [lastMatches, setLastMatches] = useState<FaceMatch[]>([]);
   const [lastUnknownDescriptor, setLastUnknownDescriptor] = useState<Float32Array | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [storedFacesCount, setStoredFacesCount] = useState(0);
@@ -211,8 +207,10 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
     return `${name}, ${relationText}, is here.`;
   }, []);
 
-  // Main detection and matching pipeline
-  const detectAndMatch = useCallback(async (videoElement: HTMLVideoElement): Promise<FaceMatch | null> => {
+  // Main detection and matching pipeline: every face in view (up to MAX_FACES), each matched
+  // one-to-one against the saved people. Returns null when it couldn't run (models not loaded,
+  // a run already in progress, an error) and [] when there is simply nobody in view.
+  const detectAndMatchAll = useCallback(async (videoElement: HTMLVideoElement): Promise<FaceMatch[] | null> => {
     if (!isModelsLoaded) {
       console.warn('[Face] Models not loaded yet');
       return null;
@@ -238,119 +236,78 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
           .withFaceDescriptors();
       }
 
-      if (!detections || detections.length === 0) {
-        console.log('[Face] No faces detected by either detector');
+      // Reject low-confidence detections (garbage boxes), then keep the most prominent few:
+      // landmarks and descriptors already ran, but matching and the HUD stay bounded.
+      const faces = pickProminent(
+        (detections ?? [])
+          .filter(d => d.detection.score >= MIN_DETECTION_SCORE)
+          .map(d => {
+            const { x, y, width, height } = d.detection.box;
+            return { box: { x, y, width, height }, score: d.detection.score, descriptor: new Float32Array(d.descriptor) };
+          }),
+      );
+
+      if (faces.length === 0) {
+        console.log('[Face] No confident faces detected');
         setLastMatch(null);
+        setLastMatches([]);
         // Forget the previous stranger so "remember X" can't save an old face under a new name
         updateLastUnknownDescriptor(null);
-        return null;
+        return [];
       }
 
-      // Pick the detection with the highest score (most confident)
-      let bestDetection = detections[0];
-      for (let i = 1; i < detections.length; i++) {
-        if (detections[i].detection.score > bestDetection.detection.score) {
-          bestDetection = detections[i];
+      // Saved people with a usable descriptor, in the same order as their descriptors
+      const people: { record: FaceRecord; descriptor: Float32Array }[] = [];
+      for (const record of storedFacesRef.current) {
+        const descriptor = toFloat32Array(record.descriptor);
+        if (descriptor) people.push({ record, descriptor });
+        else console.warn(`[Face] Skipping face ${record.name} — invalid descriptor`);
+      }
+
+      const assignments = assignIdentities(faces.map(face => face.descriptor), people.map(person => person.descriptor));
+      const now = new Date();
+      const matches: FaceMatch[] = faces.map((face, index) => {
+        const { person, distance } = assignments[index];
+        if (person === null) {
+          return { name: 'Unknown', known: false, descriptor: face.descriptor, distance: people.length ? distance : undefined, box: face.box };
         }
-      }
-
-      const score = bestDetection.detection.score;
-      console.log(`[Face] Best detection score: ${score.toFixed(3)} (min: ${MIN_DETECTION_SCORE})`);
-
-      // Reject low-confidence detections
-      if (score < MIN_DETECTION_SCORE) {
-        console.log('[Face] Detection score too low, skipping match');
-        setLastMatch(null);
-        updateLastUnknownDescriptor(null);
-        return null;
-      }
-
-      const currentDescriptor = new Float32Array(bestDetection.descriptor);
-
-      // Fetch latest faces from database
-      const storedFaces = storedFacesRef.current;
-
-      if (storedFaces.length === 0) {
-        const unknownMatch: FaceMatch = {
-          name: 'Unknown',
-          known: false,
-          descriptor: currentDescriptor
-        };
-        setLastMatch(unknownMatch);
-        updateLastUnknownDescriptor(currentDescriptor);
-        return unknownMatch;
-      }
-
-      // Find best match across all stored faces
-      let bestMatchRecord: FaceRecord | null = null;
-      let bestDistance = Infinity;
-
-      for (const face of storedFaces) {
-        const storedDescriptor = toFloat32Array(face.descriptor);
-        if (!storedDescriptor) {
-          console.warn(`[Face] Skipping face ${face.name} — invalid descriptor`);
-          continue;
-        }
-
-        const distance = euclideanDistance(currentDescriptor, storedDescriptor);
-
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestMatchRecord = face;
-        }
-      }
-
-      console.log(`[Face] Best match: ${bestMatchRecord?.name || 'none'}, distance: ${bestDistance.toFixed(4)}, threshold: ${MATCH_THRESHOLD}`);
-
-      if (bestMatchRecord && bestDistance < MATCH_THRESHOLD) {
-        // Calculate temporal context
-        const now = new Date();
-        const lastSeen = bestMatchRecord.lastSeen instanceof Date
-          ? bestMatchRecord.lastSeen
-          : new Date(bestMatchRecord.lastSeen);
+        const record = people[person].record;
+        const lastSeen = record.lastSeen instanceof Date ? record.lastSeen : new Date(record.lastSeen);
         const daysSinceLastSeen = daysBetween(lastSeen, now);
-
-        const context: FaceContext = {
-          name: bestMatchRecord.name,
-          relation: bestMatchRecord.relation || 'Acquaintance',
-          lastSeen,
-          daysSinceLastSeen,
-          isLongAbsence: daysSinceLastSeen >= DAYS_THRESHOLD
-        };
-
-        // Never train on an unconfirmed prediction: a false positive would corrupt enrollment.
-        if (bestMatchRecord.id) {
-          // A failed timestamp write must not turn a successful match into "no face".
-          await faceDB.updateLastSeen(bestMatchRecord.id).catch(err =>
-            console.error('[Face] Failed to update lastSeen:', err)
-          );
-        }
-
-        const knownMatch: FaceMatch = {
-          name: bestMatchRecord.name,
+        return {
+          name: record.name,
           known: true,
-          distance: bestDistance,
-          id: bestMatchRecord.id,
-          context
+          distance,
+          id: record.id,
+          box: face.box,
+          context: {
+            name: record.name,
+            relation: record.relation || 'Acquaintance',
+            lastSeen,
+            daysSinceLastSeen,
+            isLongAbsence: daysSinceLastSeen >= DAYS_THRESHOLD,
+          },
         };
-        setLastMatch(knownMatch);
-        updateLastUnknownDescriptor(null);
+      });
+      console.log(`[Face] ${matches.length} face(s): ${matches.map(m => `${m.name}${m.distance !== undefined ? ` (${m.distance.toFixed(3)})` : ''}`).join(', ')}`);
 
-        // Refresh last-seen timestamps before the next cycle
-        refreshStoredFaces();
+      // Never train on an unconfirmed prediction: a false positive would corrupt enrollment.
+      // A failed timestamp write must not turn a successful match into "no face".
+      const known = matches.filter(match => match.known && match.id !== undefined);
+      await Promise.all(known.map(match =>
+        faceDB.updateLastSeen(match.id as number).catch(err => console.error('[Face] Failed to update lastSeen:', err))
+      ));
 
-        return knownMatch;
-      } else {
-        const unknownMatch: FaceMatch = {
-          name: 'Unknown',
-          known: false,
-          descriptor: currentDescriptor,
-          distance: bestDistance
-        };
-        setLastMatch(unknownMatch);
-        updateLastUnknownDescriptor(currentDescriptor);
-        return unknownMatch;
-      }
+      // The most prominent face stays lastMatch for single-face callers; the most prominent
+      // stranger is the one "neuro remember X" and the Add button save.
+      setLastMatch(matches[0]);
+      setLastMatches(matches);
+      updateLastUnknownDescriptor(matches.find(match => !match.known)?.descriptor ?? null);
+
+      // Refresh last-seen timestamps before the next cycle
+      if (known.length > 0) refreshStoredFaces();
+
+      return matches;
     } catch (error) {
       console.error('[Face] Detection error:', error);
       return null;
@@ -359,6 +316,12 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       setIsProcessing(false);
     }
   }, [isModelsLoaded, refreshStoredFaces, updateLastUnknownDescriptor]);
+
+  // Single-face form: the most prominent face only, as before multi-face support.
+  const detectAndMatch = useCallback(async (videoElement: HTMLVideoElement): Promise<FaceMatch | null> => {
+    const matches = await detectAndMatchAll(videoElement);
+    return matches?.[0] ?? null;
+  }, [detectAndMatchAll]);
 
   // Register the current unknown face. A caller that already holds a fresh descriptor (e.g. the
   // "Neuro remember <name>" path straight after detectAndMatch) can pass it explicitly; otherwise
@@ -386,7 +349,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       updateLastUnknownDescriptor(null);
 
       const now = new Date();
-      setLastMatch({
+      const registered: FaceMatch = {
         id,
         name: name.trim(),
         known: true,
@@ -397,7 +360,12 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
           daysSinceLastSeen: 0,
           isLongAbsence: false
         }
-      });
+      };
+      setLastMatch(registered);
+      // The saved stranger's tag turns into their name straight away, in the same place
+      setLastMatches(matches => matches.map(match =>
+        match.descriptor === descriptor ? { ...registered, box: match.box } : match
+      ));
 
       console.log(`[Face] Registered: ${name} (${relation})`);
       return true;
@@ -412,6 +380,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       await faceDB.clearAllFaces();
       await refreshStoredFaces();
       setLastMatch(null);
+      setLastMatches([]);
       updateLastUnknownDescriptor(null);
     } catch (error) {
       console.error('[Face] Error clearing faces:', error);
@@ -430,10 +399,12 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
     isLoadingModels,
     modelLoadError,
     lastMatch,
+    lastMatches,
     lastUnknownDescriptor,
     isProcessing,
     storedFacesCount,
     detectAndMatch,
+    detectAndMatchAll,
     registerCurrentFace,
     loadModels,
     retryLoadModels,

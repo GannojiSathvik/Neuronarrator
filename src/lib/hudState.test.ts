@@ -5,6 +5,7 @@ import {
   FACE_FADE_MS,
   hazardBannerText,
   isHazardVisible,
+  joinTrackedToMatches,
   mergeHeldFaces,
   nextFadeAt,
   type HudFace,
@@ -12,11 +13,13 @@ import {
 } from "./hudState";
 
 const screen = { width: 1280, height: 720 };
+const video = { width: 1280, height: 720 };
+const leftBox = { x: 100, y: 100, width: 200, height: 200 };
+const rightBox = { x: 800, y: 120, width: 180, height: 180 };
 const base: RealHudInput = {
-  trackedFace: { box: { x: 100, y: 100, width: 200, height: 200 }, video: { width: 1280, height: 720 } },
+  trackedFaces: [{ id: 1, box: leftBox, video }],
   mirrored: false,
-  match: null,
-  canEnroll: false,
+  matches: [],
   screen,
   connected: true,
 };
@@ -27,15 +30,14 @@ describe("buildHudFromReal", () => {
   });
 
   it("shows no tag without a tracked box", () => {
-    const hud = buildHudFromReal({ ...base, trackedFace: null, match: { known: true, name: "Asha", id: 1 } });
+    const hud = buildHudFromReal({ ...base, trackedFaces: [], matches: [{ known: true, name: "Asha", id: 1, box: leftBox }] });
     expect(hud.faces).toEqual([]);
   });
 
   it("turns a known match into name, relation and memory", () => {
     const hud = buildHudFromReal({
       ...base,
-      match: { known: true, name: "Asha", id: 7, relation: "Friend" },
-      memory: "Talked about the trip.",
+      matches: [{ known: true, name: "Asha", id: 7, relation: "Friend", memory: "Talked about the trip.", box: leftBox }],
     });
     expect(hud.faces).toEqual([
       {
@@ -49,13 +51,18 @@ describe("buildHudFromReal", () => {
   });
 
   it("turns an unknown match into a nameless tag that can be enrolled", () => {
-    const hud = buildHudFromReal({ ...base, match: { known: false, name: "Unknown" }, canEnroll: true });
-    expect(hud.faces[0]).toMatchObject({ id: "unknown", name: null, canEnroll: true });
+    const hud = buildHudFromReal({ ...base, matches: [{ known: false, name: "Unknown", box: leftBox, canEnroll: true }] });
+    expect(hud.faces[0]).toMatchObject({ id: "unknown-1", name: null, canEnroll: true });
     expect(hud.faces[0].memory).toBeUndefined();
   });
 
+  it("still joins a single face to a single result that has no box", () => {
+    const hud = buildHudFromReal({ ...base, matches: [{ known: true, name: "Asha", id: 7 }] });
+    expect(hud.faces.map((face) => face.name)).toEqual(["Asha"]);
+  });
+
   it("maps the box through the mirroring", () => {
-    const hud = buildHudFromReal({ ...base, mirrored: true, match: { known: false, name: "Unknown" } });
+    const hud = buildHudFromReal({ ...base, mirrored: true, matches: [{ known: false, name: "Unknown", box: leftBox }] });
     expect(hud.faces[0].screenBox.x).toBe(1280 - 100 - 200);
   });
 
@@ -63,6 +70,60 @@ describe("buildHudFromReal", () => {
     const hazard = { text: "Stairs", at: 5 };
     const hud = buildHudFromReal({ ...base, caption: { text: "A room" }, hazard, connected: false });
     expect(hud).toMatchObject({ caption: { text: "A room" }, hazard, connected: false });
+  });
+});
+
+describe("buildHudFromReal with several people", () => {
+  // The tracker's boxes have moved a little since recognition ran, and recognition listed the
+  // people in a different order: each box must still get its own person.
+  const tracked = [
+    { id: 3, box: { ...rightBox, x: rightBox.x + 15 }, video },
+    { id: 4, box: { ...leftBox, x: leftBox.x - 10 }, video },
+  ];
+
+  it("joins each tracked face to the recognition result it overlaps", () => {
+    const hud = buildHudFromReal({
+      ...base,
+      trackedFaces: tracked,
+      matches: [
+        { known: true, name: "Asha", id: 7, box: leftBox },
+        { known: true, name: "Ronit", id: 9, box: rightBox },
+      ],
+    });
+    expect(hud.faces.map((face) => [face.name, face.screenBox.x])).toEqual([
+      ["Ronit", 815],
+      ["Asha", 90],
+    ]);
+  });
+
+  it("gives a known person and a stranger their own tags, Add only on the cached stranger", () => {
+    const hud = buildHudFromReal({
+      ...base,
+      trackedFaces: [...tracked, { id: 5, box: { x: 500, y: 400, width: 120, height: 120 }, video }],
+      matches: [
+        { known: true, name: "Asha", id: 7, box: leftBox },
+        { known: false, name: "Unknown", box: rightBox, canEnroll: true },
+        { known: false, name: "Unknown", box: { x: 500, y: 400, width: 120, height: 120 } },
+      ],
+    });
+    expect(hud.faces.map((face) => [face.id, face.name, face.canEnroll])).toEqual([
+      ["unknown-3", null, true],
+      ["person-7", "Asha", undefined],
+      ["unknown-5", null, false],
+    ]);
+  });
+
+  it("leaves a newcomer the recognition hasn't seen yet without a tag", () => {
+    const hud = buildHudFromReal({
+      ...base,
+      trackedFaces: tracked,
+      matches: [{ known: true, name: "Asha", id: 7, box: leftBox }],
+    });
+    expect(hud.faces.map((face) => face.name)).toEqual(["Asha"]);
+  });
+
+  it("joins one-to-one, so two boxes can't both become the same person", () => {
+    expect(joinTrackedToMatches(tracked, [{ box: leftBox }])).toEqual([-1, 0]);
   });
 });
 

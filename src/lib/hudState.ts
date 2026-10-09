@@ -1,13 +1,14 @@
 // The HUD (heads-up display) is drawn from ONE view-model, HudState. Two producers fill it:
-// buildHudFromReal (face tracker + last recognition + saved memory + vision caption + hazard +
-// backend health) and buildHudFromDemo (a scripted timeline, for showing the UI without a
+// buildHudFromReal (face tracker + last recognition of every face + saved memories + vision
+// caption + hazard + backend health) and buildHudFromDemo (a scripted timeline, for showing the UI without a
 // backend or a real face). The HUD components never know which one they are looking at, so
 // the demo exercises exactly the same rendering, animation and placement code as real use.
 
 import { videoBoxToScreen, type Rect, type Size } from "./facePlacement";
+import { matchBoxes } from "./faceTracks";
 
 export interface HudFace {
-  /** Stable per person ("person-3", "unknown", "demo-jake"): animations key on it. */
+  /** Stable per person ("person-3", "unknown-2", "demo-jake"): animations key on it. */
   id: string;
   /** null = an unrecognised face ("Unknown" chip). */
   name: string | null;
@@ -40,40 +41,69 @@ export interface HudState {
   connected: boolean;
 }
 
+/** One recognised face from the last full recognition, already joined with its saved note. */
+export interface HudMatch {
+  known: boolean;
+  name: string;
+  id?: number;
+  relation?: string;
+  /** Latest saved note for this person, if any. */
+  memory?: string;
+  /** Where recognition found the face, in video pixels; joins it to a tracked box. */
+  box?: Rect;
+  /** This stranger's descriptor is the cached one, so Add saves them. */
+  canEnroll?: boolean;
+}
+
 export interface RealHudInput {
-  /** From useFaceTracker: the face box in the video's own pixels. */
-  trackedFace: { box: Rect; video: Size } | null;
+  /** From useFaceTracker: every face box in the video's own pixels, with a stable id. */
+  trackedFaces: { id: number; box: Rect; video: Size }[];
   /** Whether the camera preview is drawn mirrored (selfie view). */
   mirrored: boolean;
-  /** The last full recognition result (identity); the tracker only knows where a face is. */
-  match: { known: boolean; name: string; id?: number; relation?: string } | null;
-  /** A stranger's descriptor is cached, so Add can save them. */
-  canEnroll: boolean;
-  /** Latest saved note for the matched person, if any. */
-  memory?: string;
+  /** The last full recognition (identities); the tracker only knows where faces are. */
+  matches: HudMatch[];
   screen: Size;
   caption?: HudCaption;
   hazard?: HudHazard;
   connected: boolean;
 }
 
+/**
+ * Which recognition result belongs to which tracked box. Recognition runs every few seconds
+ * with its own detector, the tracker four times a second, so their boxes are close but not
+ * equal: pair them one-to-one by overlap (closest centres as a fallback, see matchBoxes).
+ * Returns, for each tracked face, the index of its match or -1.
+ */
+export function joinTrackedToMatches(tracked: { box: Rect }[], matches: { box?: Rect }[]): number[] {
+  const withBox = matches.flatMap((match, index) => (match.box ? [{ box: match.box, index }] : []));
+  // A result without a box (a face saved by voice just now) can only be the single face in view
+  if (withBox.length === 0) return tracked.length === 1 && matches.length === 1 ? [0] : tracked.map(() => -1);
+  return matchBoxes(withBox.map((match) => match.box), tracked.map((face) => face.box)).map((index) =>
+    index === -1 ? -1 : withBox[index].index,
+  );
+}
+
 export function buildHudFromReal(input: RealHudInput): HudState {
+  const joined = joinTrackedToMatches(input.trackedFaces, input.matches);
   const faces: HudFace[] = [];
-  // A box without an identity yet (no recognition has run) gets no tag: there is nothing to say.
-  if (input.trackedFace && input.match) {
-    const screenBox = videoBoxToScreen(input.trackedFace.box, input.trackedFace.video, input.screen, input.mirrored);
+  input.trackedFaces.forEach((tracked, i) => {
+    const match = joined[i] === -1 ? undefined : input.matches[joined[i]];
+    // A box without an identity yet (no recognition has run) gets no tag: there is nothing to say.
+    if (!match) return;
+    const screenBox = videoBoxToScreen(tracked.box, tracked.video, input.screen, input.mirrored);
     faces.push(
-      input.match.known
+      match.known
         ? {
-            id: `person-${input.match.id ?? input.match.name}`,
-            name: input.match.name,
-            relation: input.match.relation,
-            memory: input.memory || undefined,
+            id: `person-${match.id ?? match.name}`,
+            name: match.name,
+            relation: match.relation,
+            memory: match.memory || undefined,
             screenBox,
           }
-        : { id: "unknown", name: null, screenBox, canEnroll: input.canEnroll },
+        : // Strangers are told apart by their tracker id, so two Unknown tags never share a key
+          { id: `unknown-${tracked.id}`, name: null, screenBox, canEnroll: !!match.canEnroll },
     );
-  }
+  });
   return { faces, hazard: input.hazard, caption: input.caption, connected: input.connected };
 }
 

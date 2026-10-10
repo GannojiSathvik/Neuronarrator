@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { liveQuery } from "dexie";
 import { db, type FaceRecord } from "@/lib/faceDatabase";
-import type { ConversationMemory } from "@/lib/memory";
+import { isTimelineMemory, type ConversationMemory } from "@/lib/memory";
 
 export function useMemoryLibrary() {
   const [people, setPeople] = useState<FaceRecord[]>([]);
@@ -12,7 +12,8 @@ export function useMemoryLibrary() {
     const subscription = liveQuery(() =>
       db.transaction("r", db.faces, db.memories, async () => ({
         people: await db.faces.orderBy("name").toArray(),
-        memories: await db.memories.orderBy("occurredAt").reverse().toArray(),
+        // Automatic sightings answer questions but don't clutter the timeline
+        memories: (await db.memories.orderBy("occurredAt").reverse().toArray()).filter(isTimelineMemory),
       })),
     ).subscribe({
       next: (value) => {

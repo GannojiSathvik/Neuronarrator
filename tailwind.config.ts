@@ -71,6 +71,13 @@ export default {
           purple: "hsl(var(--ios-purple))",
           "surface-elevated": "hsl(var(--surface-elevated))",
         },
+        // Heads-up overlay chips. Reference look, darkened just enough for white text to pass
+        // WCAG AA for large text (name 3.9:1, relation 3.8:1); the reference's #4cc3e0 is 2:1.
+        hud: {
+          name: "#2f8f86",
+          relation: "#1a8db0",
+          unknown: "#5b6470",
+        },
         glass: {
           bg: "hsl(var(--glass-bg))",
           border: "hsl(var(--glass-border))",

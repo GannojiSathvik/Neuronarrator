@@ -1,6 +1,6 @@
 # NeuroNarrator
 
-An assistive web app for blind and visually impaired people. It watches through the phone camera, describes the scene out loud, reads Indian Rupee notes, helps find a named object, and recognises people the user has saved. It is operated by touch and voice rather than buttons.
+An assistive web app for blind and visually impaired people. It watches through the phone camera, describes the scene out loud, reads printed text, reads Indian Rupee notes, helps find a named object, and recognises people the user has saved. It is operated by touch and voice rather than buttons.
 
 > **Status:** prototype. The original version was generated with [Lovable](https://lovable.dev) and is published by its owner at <https://neuronarrator.lovable.app>. This repository keeps that full commit history and adds later fixes (see [Credits](#credits)).
 
@@ -9,11 +9,12 @@ An assistive web app for blind and visually impaired people. It watches through 
 | Feature | How it works |
 |---|---|
 | **Scene description** (Standard mode) | Every captured frame is described in one or two casual sentences, with rough distances and positions. |
+| **Text reader** (Read mode) | Say "read this" or "what does it say" (or "Neuro read" hands-free). The app says what kind of thing it is, such as "Looks like a menu", then reads the text out and shows it large on screen. |
 | **Currency reader** | Identifies Indian Rupee notes and coins and says the total. |
 | **Item finder** | "Find my keys": a high ping and vibration when the item is visible, a low thrum when it isn't, and spoken directions when found. |
 | **Hazard alerts** | The model rates each scene 1–10. Above 7 the app says "Warning", vibrates an SOS-style pattern, shows a banner and plays alarm tones. |
 | **Face recognition** | Runs in the browser with face-api.js. Say "Neuro remember Ronit" while someone is in view, and later descriptions use their name, relationship and how long since you last saw them. |
-| **Voice control** | Hold anywhere to speak a command (push-to-talk), or say "Neuro …" hands-free. Recognition uses the browser's Web Speech API tuned for Indian English (`en-IN`). |
+| **Voice control** | Hold anywhere to speak a command (push-to-talk); it keeps listening until you let go: "describe", "read this", "count notes", "find my keys". Hands-free, say "Neuro describe", "Neuro read", "Neuro currency" or "Neuro find my keys". The app repeats back what it heard. Recognition uses the browser's Web Speech API tuned for Indian English (`en-IN`). |
 | **Speech output** | Sarvam AI text-to-speech; falls back to the browser's built-in voice if that fails. |
 | **Haptic Braille** | The first words of a hazard warning are vibrated as Braille patterns. |
 
@@ -37,10 +38,11 @@ flowchart LR
     STT[speech-to-text]
   end
   AI --> Groq[Groq: Qwen 3.8 27B]
+  AI -. fallback .-> Gemini[Google: Gemini 3.8 Flash]
   AI -. fallback .-> Claude[Anthropic: Claude]
-  AI -. fallback .-> Gemini[Lovable gateway: Gemini 2.5 Flash]
   TTS --> Sarvam[Sarvam AI]
-  STT --> Sarvam
+  STT --> Whisper[Groq: Whisper large v3 turbo]
+  STT -. fallback .-> Sarvam
 ```
 
 There is no server-side database and no user login. Everything the app remembers (saved faces) lives in the browser's IndexedDB.
@@ -49,7 +51,7 @@ There is no server-side database and no user login. Everything the app remembers
 
 1. The user taps the screen. The camera starts, and a frame is captured about 1.5 s later.
 2. In Standard mode, face-api.js looks for a face first, with a 2 s timeout. A match within Euclidean distance 0.55 of a saved face adds that person's name, relation and last-seen time to the request. An unknown face pauses narration for 5 s so the user can say "Neuro remember <name>".
-3. The frame goes to the `analyze-image` edge function, which picks a system prompt for the mode and asks a vision model for JSON (`description`, `text_content`, `hazards`, `priority`, and `found` in finder mode). It tries Groq's Qwen 3.8 27B, then Claude, then Gemini, depending on which API keys are configured. (The original Llama 4 Scout and Maverick models were shut down by Groq in 2026.)
+3. The frame goes to the `analyze-image` edge function, which picks a system prompt for the mode and asks a vision model for JSON (`description`, `text_content`, `hazards`, `priority`, and `found` in finder mode). It tries Groq's Qwen 3.8 27B, then Gemini Flash (called directly with your own Google key), then Claude, depending on which API keys are configured. A legacy Lovable-gateway Gemini fallback is tried last and only works on Lovable Cloud. (The original Llama 4 Scout and Maverick models were shut down by Groq in 2026.)
 4. The browser speaks the answer and plays tones or vibration based on the mode and priority.
 5. **The next frame is captured only after speech finishes**, so descriptions never overlap. A watchdog restarts the loop if analysis hangs for more than 15 s or speech for more than 12 s.
 
@@ -61,8 +63,8 @@ There is no server-side database and no user login. Everything the app remembers
 | Browser APIs | Web Speech API (recognition), Web Audio API (tones, TTS playback), Vibration API, IndexedDB |
 | On-device ML | face-api.js (SSD MobileNet v1 + TinyFaceDetector, 68-point landmarks, 128-d face descriptors); Dexie for storage |
 | Backend | Supabase Edge Functions (Deno), hosted on Lovable Cloud |
-| Vision models | Groq `qwen/qwen3.8-27b`; Anthropic `claude-opus-5-5` (optional fallback); Lovable gateway `google/gemini-2.5-flash` (fallback) |
-| Speech | Sarvam AI `bulbul:v2` (TTS), `saarika:v2.5` (STT) |
+| Vision models | Groq `qwen/qwen3.8-27b`; Google `gemini-3.5-flash` (fallback, override with `GEMINI_MODEL`); Anthropic `claude-opus-5-5` (fallback); Lovable gateway `google/gemini-2.5-flash` (legacy, Lovable Cloud only) |
+| Speech | Sarvam AI `bulbul:v2` (TTS); Groq `whisper-large-v3-turbo` (STT, override with `STT_MODEL`), Sarvam `saarika:v2.5` as STT fallback |
 | Testing | Vitest, Testing Library, jsdom |
 
 ## Project structure
@@ -83,7 +85,8 @@ src/
 supabase/functions/
   analyze-image/                vision prompts, provider fallback, JSON parsing
   text-to-speech/               Sarvam TTS proxy
-  speech-to-text/               Sarvam STT proxy (used by the Add Person dialog)
+  speech-to-text/               Groq Whisper STT, Sarvam fallback (used by the Add Person dialog)
+  _shared/                      pure helpers (Gemini request, audio types) with Vitest tests
 ```
 
 ## Running locally
@@ -105,14 +108,31 @@ The committed `.env` points the frontend at the original Lovable Cloud project:
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon (publishable) key. It is meant to be public in a browser app. |
 | `VITE_SUPABASE_PROJECT_ID` | Supabase project ID |
 
-To use your own backend, create a Supabase project, deploy the functions (`supabase functions deploy`) and set their secrets:
+To use your own backend, run `./scripts/setup-own-backend.sh` (guide: [docs/SETUP_OWN_BACKEND.md](docs/SETUP_OWN_BACKEND.md)), or create a Supabase project, deploy the functions (`supabase functions deploy`) and set their secrets yourself:
 
 | Secret | Used by | Required |
 |---|---|---|
-| `GROQ_API_KEY` | analyze-image | at least one vision key |
-| `ANTHROPIC_API_KEY` | analyze-image (Claude fallback) | optional |
-| `LOVABLE_API_KEY` | analyze-image (Gemini fallback, Lovable Cloud only) | optional |
-| `SARVAM_API_KEY` | text-to-speech, speech-to-text | optional; without it the app uses browser TTS |
+| `GROQ_API_KEY` | analyze-image, speech-to-text (Whisper) | at least one of Groq, Gemini or Anthropic; free tier |
+| `GEMINI_API_KEY` | analyze-image (Gemini fallback) | free tier from aistudio.google.com/apikey |
+| `ANTHROPIC_API_KEY` | analyze-image (Claude fallback) | optional, paid |
+| `SARVAM_API_KEY` | text-to-speech; speech-to-text fallback | optional; without it the app uses browser TTS |
+| `LOVABLE_API_KEY` | analyze-image (legacy, Lovable Cloud only) | optional |
+
+## Memory model
+
+The app remembers at three levels. Only the long-term tier is saved; everything stays on the device until a question is asked.
+
+| Tier | Where | Size and lifetime | What it holds |
+|---|---|---|---|
+| Very short-term | `lastDescriptionRef`, `src/lib/novelty.ts` | The last description (≤ 1000 chars); repeats muted for 30 s; a person's reminder spoken once per 60 s appearance | Stops the narrator repeating itself |
+| Working memory | `src/lib/workingMemory.ts` (in the tab only, gone on reload) | A ring buffer of the last 3 minutes, at most 40 entries | Scenes, text read, hazards, people appearing (known or not), and question/answer pairs |
+| Long-term | IndexedDB (Dexie): `faces` and `memories` | Unlimited, until the user deletes it | People, the user's dated notes about them, and automatic sightings |
+
+**Working memory.** A near-duplicate (the same scene reworded, judged with the same word-overlap test as the repeat check, or the same person still in view) refreshes the existing entry instead of adding one, so a static scene can't fill the buffer. When you ask a question, the buffer is summarised newest first (`8s ago: Ronit (Friend) appeared`, `25s ago: scene — a desk with a laptop`) in at most 800 characters. The newest line always goes first, so the last few seconds are never cut. The summary is sent as `recentContext`.
+
+**Long-term recall.** For a question, the app picks up to 3 people: anyone named in the question, the face in view, and people seen in the last few minutes. For each, it reads that person's newest 50 notes with one indexed Dexie query (`[personId+occurredAt]`). It then ranks them with BM25 against the question, keeping the top 3, or the newest 2 when nothing matches. The notes are quoted, not summarised, and capped at 1200 characters in total. They are sent as `personNotes`, and the model is told to quote them faithfully and never invent personal facts.
+
+**Sightings.** The first time a known face is recognised, and then at most once every 10 minutes, a note with source `sighting` ("Seen at 4:12 PM on 10 Oct 2026.") is saved. That answers "when did I last see Meera?". Sightings are hidden from the Memory space timeline and never used as the spoken "Last time" reminder.
 
 ## Edge function API
 
@@ -120,11 +140,9 @@ The frontend calls all three with `supabase.functions.invoke`. Each returns JSON
 
 | Function | Request | Success response | Errors |
 |---|---|---|---|
-| `analyze-image` | `{ imageBase64, mode: "general"\|"reader"\|"currency"\|"finder", knownFaces?, previousDescription?, targetItem? }` | `{ text_content, description, hazards[], priority 1–10, found? }` | 400 invalid input · 500 no provider configured · 503 all models failed |
+| `analyze-image` | `{ imageBase64, mode: "general"\|"reader"\|"currency"\|"finder", knownFaces?, previousDescription?, targetItem?, question?, recentContext? (≤ 1000 chars), personNotes? ([{ name, notes[] }], ≤ 3 people, ≤ 1200 chars) }` | `{ text_content, description, hazards[], priority 1–10, found? }` | 400 invalid input · 500 no provider configured · 503 all models failed |
 | `text-to-speech` | `{ text, speaker?: "anushka"\|"abhilash" }` (text truncated to 500 chars) | `{ audioBase64 }` | 400 · 429 rate limited · 502 Sarvam error · 504 timeout (8 s) |
-| `speech-to-text` | `{ audioBase64 (webm), language_code?: "en-IN" }` | `{ transcript }` | 400 · 502 Sarvam error |
-
-The `reader` mode exists in the backend but the current UI never sends it.
+| `speech-to-text` | `{ audioBase64, language_code?: "en-IN", mime_type?: "audio/webm"\|"audio/mp4"\|"audio/ogg"\|"audio/wav"… }` | `{ transcript }` | 400 · 500 no provider configured · 502 provider error or timeout (9 s) |
 
 ## Testing
 
@@ -134,11 +152,11 @@ npm run lint
 npm run build
 ```
 
-The tests cover push-to-talk command parsing and face registration from a voice command. The edge functions have no automated tests. They were checked by running them locally in Deno and sending requests.
+The tests cover push-to-talk command parsing, the hands-free "Neuro read" matcher, and face registration from a voice command. The edge functions have no automated tests. They were checked by running them locally in Deno and sending requests.
 
 ## Security and privacy notes
 
-- **Camera frames leave the device.** Face descriptors stay in IndexedDB, but every analysed frame, including any faces in it, is sent to the vision provider. In Standard mode the names and relations of recognised people are sent too.
+- **Camera frames leave the device.** Face descriptors stay in IndexedDB, but every analysed frame, including any faces in it, is sent to the vision provider. In Standard mode the names and relations of recognised people are sent too. On Gemini's free tier, Google may use those requests to improve its products. Voice recordings sent to speech-to-text go to Groq (or Sarvam).
 - **The edge functions are unauthenticated** (`verify_jwt = false`, CORS `*`). Anyone who finds the URLs can use the configured API quotas. Input is validated and size-limited, but there is no per-user rate limiting.
 - The text-to-speech rate limit (1 request per 2 s) is kept in memory and keyed on the Authorization header. Every user sends the same public anon key, so they all share one limit.
 - The committed Supabase key is the anon key, which is public by design. Provider API keys live only as function secrets.
@@ -149,6 +167,6 @@ The tests cover push-to-talk command parsing and face registration from a voice 
 - The TTS request's `AbortController` is never passed to the fetch, so stopping speech doesn't cancel a request already in flight.
 - face-api.js is unmaintained, loads its model weights from a third-party GitHub Pages URL, and makes the JS bundle about 1.45 MB.
 - Flipping the camera during face detection can log an uncaught face-api.js error. The app keeps running.
-- Currency phrases are matched before finder phrases, so "find my money" switches to currency mode.
+- Speech goes through Sarvam text-to-speech, which cuts text at 500 characters, so a long page in Read mode is only partly read aloud. The full text is still shown on screen.
 - `npm run lint` still reports issues in the original code (mostly `any` types and empty `catch` blocks).
 

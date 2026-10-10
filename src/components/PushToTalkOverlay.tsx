@@ -1,9 +1,11 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Play } from "lucide-react";
+import { Loader2, Mic, Play } from "lucide-react";
 import { type CommandMode } from "@/hooks/useVoiceControl";
 
 interface PushToTalkOverlayProps {
   isListening: boolean;
+  /** Released, and the command is still being transcribed */
+  isTranscribing?: boolean;
   isActive: boolean;
   onTouchStart: () => void;
   onTouchEnd: () => void;
@@ -14,6 +16,7 @@ interface PushToTalkOverlayProps {
 
 export const PushToTalkOverlay = ({
   isListening,
+  isTranscribing = false,
   isActive,
   onTouchStart,
   onTouchEnd,
@@ -73,6 +76,8 @@ export const PushToTalkOverlay = ({
           ? "Start NeuroNarrator"
           : isListening
           ? "Listening. Release to process command"
+          : isTranscribing
+          ? "Understanding your command"
           : "Hold to speak a command"
       }
       aria-pressed={isActive ? isListening : undefined}
@@ -159,6 +164,27 @@ export const PushToTalkOverlay = ({
               <p className="text-xs text-muted-foreground">
                 Release to process command
               </p>
+            </motion.div>
+          ) : isTranscribing ? (
+            /* Released — waiting for the server transcript */
+            <motion.div
+              key="transcribing"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="flex flex-col items-center gap-4"
+            >
+              <div className="w-20 h-20 rounded-full bg-ios-blue/40 flex items-center justify-center">
+                <Loader2 className="w-8 h-8 text-foreground animate-spin" />
+              </div>
+              {transcript && (
+                <div className="glass-panel super-ellipse-sm px-5 py-3 max-w-xs">
+                  <p className="text-sm text-foreground text-center font-medium">
+                    "{transcript}"
+                  </p>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">Understanding…</p>
             </motion.div>
           ) : (
             /* Active but not listening — subtle hold prompt */

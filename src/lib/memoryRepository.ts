@@ -1,10 +1,29 @@
+import Dexie from "dexie";
 import {
   db,
   faceDB,
   RELATION_OPTIONS,
   type RelationType,
 } from "./faceDatabase";
-import { validateMemory, type ConversationMemory } from "./memory";
+import {
+  capPersonNotes,
+  isTimelineMemory,
+  MEMORY_SOURCES,
+  selectPersonNotes,
+  sightingNote,
+  validateMemory,
+  type ConversationMemory,
+  type PersonNotes,
+} from "./memory";
+
+/** At most this many of a person's newest notes are ranked for a question. */
+const NOTES_PER_PERSON_SCANNED = 50;
+
+/** One person's notes, newest first, read from the [personId+occurredAt] index (not the library). */
+const notesOf = (personId: number) =>
+  db.memories
+    .where("[personId+occurredAt]")
+    .between([personId, Dexie.minKey], [personId, Dexie.maxKey]);
 
 export const memoryRepository = {
   async addPerson(name: string, relation: RelationType): Promise<number> {
@@ -26,7 +45,7 @@ export const memoryRepository = {
     id?: number,
   ): Promise<number> {
     validateMemory(input);
-    if (!["note", "dictation", "sample"].includes(input.source))
+    if (!MEMORY_SOURCES.includes(input.source))
       throw new Error("Invalid note source.");
     return db.transaction("rw", db.faces, db.memories, async () => {
       if (!(await db.faces.get(input.personId)))
@@ -48,6 +67,37 @@ export const memoryRepository = {
   },
 
   deleteMemory: (id: number) => db.memories.delete(id),
+
+  /** One person's most recent written note. An automatic sighting is never a "Last time" reminder. */
+  latestMemory: (personId: number): Promise<ConversationMemory | undefined> =>
+    notesOf(personId).reverse().filter(isTimelineMemory).first(),
+
+  /** Log that a known person was seen ("Seen at 4:12 PM on 10 Oct 2026."). */
+  saveSighting(personId: number, at = new Date()): Promise<number> {
+    return memoryRepository.saveMemory({ personId, ...sightingNote(at), occurredAt: at, source: "sighting" });
+  },
+
+  /**
+   * Saved notes relevant to a spoken question, for each person (in order, up to 3): the top BM25
+   * matches, or the newest notes when nothing matches, capped to PERSON_NOTES_MAX_CHARS in total.
+   * One indexed query per person, bounded to their newest NOTES_PER_PERSON_SCANNED notes.
+   */
+  async notesForQuestion(personIds: number[], question: string): Promise<PersonNotes[]> {
+    const people = await Promise.all(
+      [...new Set(personIds)].slice(0, 3).map(async (personId) => {
+        const person = await db.faces.get(personId);
+        if (!person) return null;
+        // Frequent sightings must not push written notes out of the scanned window
+        const [written, sighting] = await Promise.all([
+          notesOf(personId).reverse().filter(isTimelineMemory).limit(NOTES_PER_PERSON_SCANNED).toArray(),
+          notesOf(personId).reverse().filter((memory) => !isTimelineMemory(memory)).first(),
+        ]);
+        const memories = sighting ? [...written, sighting] : written;
+        return { name: person.name, notes: selectPersonNotes(memories, personId, question) };
+      }),
+    );
+    return capPersonNotes(people.filter((person): person is PersonNotes => !!person && person.notes.length > 0));
+  },
   deletePerson: faceDB.deleteFace,
 
   async seedSampleStory(): Promise<number> {

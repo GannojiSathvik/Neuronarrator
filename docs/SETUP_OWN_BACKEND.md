@@ -27,8 +27,8 @@ You need Node.js with npm, git, and curl. You don't need the Supabase CLI instal
 | 1 | Tools & vocabulary | read | checks for node, npx, git and curl |
 | 2 | Create Supabase project | sign up, create a free project, paste the ref | derives the Project URL and blocks the teammate's ref |
 | 3 | Publishable key | copy it from Settings → API Keys | validates the prefix and rejects `sb_secret_` keys |
-| 4 | Groq key (required) | console.groq.com/keys → Create API Key | captures it with hidden input |
-| 5 | Sarvam / Anthropic (optional) | paste them or skip | captures them with hidden input |
+| 4 | Groq and Gemini keys (free) | console.groq.com/keys and aistudio.google.com/apikey | captures them with hidden input |
+| 5 | Anthropic / Sarvam (optional) | paste them or skip | captures them with hidden input, and stops if no vision key was given |
 | 6 | Login & link | approve login in the browser | `npx supabase login`, `npx supabase link --project-ref <ref>` |
 | 7 | Secrets | confirm | `npx supabase secrets set --env-file <tmp> --project-ref <ref>` |
 | 8 | Deploy | confirm | `npx supabase functions deploy <fn> --project-ref <ref> --no-verify-jwt --use-api` for each function |
@@ -36,12 +36,17 @@ You need Node.js with npm, git, and curl. You don't need the Supabase CLI instal
 | 10 | Smoke test | confirm | curls `analyze-image` with a built-in 32x32 PNG |
 | 11 | Run & rollback | `npm run dev`, then open `/vision` | prints the rollback steps |
 
+You need **at least one** of `GROQ_API_KEY`, `GEMINI_API_KEY` or `ANTHROPIC_API_KEY`. Groq plus Gemini, both free, is the recommended setup.
+
 | Secret | Used by | Needed? |
 |---|---|---|
-| `GROQ_API_KEY` | analyze-image | yes |
-| `SARVAM_API_KEY` | text-to-speech, speech-to-text | optional; without it the app uses browser speech |
-| `ANTHROPIC_API_KEY` | analyze-image fallback | optional; Anthropic requires billing |
-| `LOVABLE_API_KEY` | analyze-image fallback | skip it, because it only works on Lovable Cloud |
+| `GROQ_API_KEY` | analyze-image (1st choice), speech-to-text (Whisper) | recommended; free tier, from console.groq.com/keys |
+| `GEMINI_API_KEY` | analyze-image (2nd choice) | recommended; free tier, from aistudio.google.com/apikey. Google may use free-tier requests to improve its products |
+| `ANTHROPIC_API_KEY` | analyze-image (3rd choice, Claude) | optional; Anthropic requires billing |
+| `SARVAM_API_KEY` | text-to-speech; speech-to-text when there is no Groq key or Groq fails | optional; without it the app uses browser speech |
+| `LOVABLE_API_KEY` | analyze-image (last, legacy) | skip it, because it only works on Lovable Cloud |
+
+Optional overrides, not set by the wizard: `GEMINI_MODEL` (default `gemini-3.5-flash`; 3.8 was overloaded and 3.7 timed out in a 9 Oct 2026 test) and `STT_MODEL` (default `whisper-large-v3-turbo`). Set them with `npx supabase secrets set NAME=value --project-ref <ref>`.
 
 ## How your keys are protected
 
@@ -76,9 +81,19 @@ curl -sS -X POST "https://$REF.supabase.co/functions/v1/analyze-image" \
 | 404 | the function isn't deployed |
 | 401 | wrong key, or the function was deployed without `--no-verify-jwt` |
 | 500 "API key not configured" | the secrets aren't set |
-| 503 | every vision model failed; check the Groq key |
+| 503 | every vision provider failed; check your keys and the function logs |
 
 Then run `npm run dev` and open http://localhost:8080/vision in Chrome. If the dev server was already running, restart it, because Vite only reads `.env` at startup.
+
+## Looking after it
+
+- **Logs and invocations.** Dashboard → your project → Edge Functions → pick a function. The **Invocations** tab lists each call with its status code and duration. The **Logs** tab shows the function's `console` output, including which provider answered (`Vision response received from model: ...`, `STT via groq ...`) and why a provider failed. Transcripts and descriptions are never logged.
+- **Provider usage and limits.**
+  - Groq: console.groq.com → Dashboard → Usage, and Settings → Limits for your free-tier rate limits.
+  - Gemini: aistudio.google.com → Dashboard → Usage (and Rate limits). Free-tier Flash models cost nothing; when you hit the limit, requests fail with 429 and the function moves on to the next provider.
+  - Anthropic: console.anthropic.com → Usage and Cost. You can set a monthly spend limit under Limits.
+- **Rotating a key.** Create a new key in the provider's console, then set it again. Re-run the wizard, or run `npx supabase secrets set --env-file <file> --project-ref <ref>` with a `chmod 600` file outside the repo, then delete the file. Functions read secrets on each run, so you don't need to redeploy. Afterwards, delete the old key in the provider's console.
+- **Free projects pause.** Supabase pauses free projects after 7 days without activity. A paused project's functions don't answer. Restore it from the dashboard (the project page shows a Restore button); it takes a few minutes.
 
 ## Rollback
 

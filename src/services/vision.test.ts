@@ -78,3 +78,44 @@ describe("vision service boundary", () => {
     );
   });
 });
+
+describe("analyzeImage question", () => {
+  it("sends a spoken question to the server", async () => {
+    invoke.mockReset();
+    invoke.mockResolvedValue({ data: { text_content: "", description: "A red mug.", hazards: [], priority: 1 }, error: null });
+    const { analyzeImage } = await import("./vision");
+    await analyzeImage("data:image/jpeg;base64,AAAA", "general", [], "", "", "what am I holding");
+    expect(invoke.mock.calls[0][1].body.question).toBe("what am I holding");
+  });
+  it("sends recent context and saved notes only with a question", async () => {
+    invoke.mockReset();
+    invoke.mockResolvedValue({ data: { description: "A red mug.", priority: 1 }, error: null });
+    const personNotes = [{ name: "Arjun", notes: ["1 Sept 2026 — Book: The Alchemist."] }];
+    await analyzeImage("image", "general", [], "", "", "what did Arjun recommend?", {
+      recentContext: "8s ago: Arjun (Friend) appeared",
+      personNotes,
+    });
+    expect(invoke.mock.calls[0][1].body).toMatchObject({
+      question: "what did Arjun recommend?",
+      recentContext: "8s ago: Arjun (Friend) appeared",
+      personNotes,
+    });
+    invoke.mockClear();
+    await analyzeImage("image", "general", [], "", "", "", { recentContext: "x", personNotes });
+    expect(invoke.mock.calls[0][1].body).not.toHaveProperty("recentContext");
+    expect(invoke.mock.calls[0][1].body).not.toHaveProperty("personNotes");
+  });
+  it("bounds the memory it sends", async () => {
+    invoke.mockReset();
+    invoke.mockResolvedValue({ data: { description: "Ok.", priority: 1 }, error: null });
+    const personNotes = [1, 2, 3].map((n) => ({ name: `P${n}`, notes: ["x".repeat(500)] }));
+    await analyzeImage("image", "general", [], "", "", "who?", { recentContext: "y".repeat(2000), personNotes });
+    const body = invoke.mock.calls[0][1].body;
+    expect(body.recentContext).toHaveLength(1000);
+    const total = body.personNotes.reduce(
+      (sum: number, p: { name: string; notes: string[] }) => sum + p.name.length + p.notes.join("").length,
+      0,
+    );
+    expect(total).toBeLessThanOrEqual(1200);
+  });
+});

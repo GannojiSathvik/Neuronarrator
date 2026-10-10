@@ -1,11 +1,16 @@
  import { X } from "lucide-react";
+ import { Switch } from "@/components/ui/switch";
  
  interface SettingsModalProps {
    isOpen: boolean;
    onClose: () => void;
+   autoDescribe: boolean;
+   onAutoDescribeChange: (enabled: boolean) => void;
+   demoMode: boolean;
+   onDemoModeChange: (enabled: boolean) => void;
  }
  
- export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
+ export const SettingsModal = ({ isOpen, onClose, autoDescribe, onAutoDescribeChange, demoMode, onDemoModeChange }: SettingsModalProps) => {
    if (!isOpen) return null;
  
    return (
@@ -23,6 +28,7 @@
            <h2 className="text-lg font-semibold text-foreground">Settings</h2>
            <button
              onClick={onClose}
+             aria-label="Close settings"
              className="w-8 h-8 rounded-full bg-surface-elevated flex items-center justify-center hover:bg-surface transition-colors"
            >
              <X className="w-4 h-4 text-muted-foreground" />
@@ -39,6 +45,42 @@
              <p className="text-sm text-muted-foreground">
                NeuroNarrator is configured and ready. Vision analysis is powered by Lovable Cloud.
              </p>
+           </div>
+ 
+           {/* Auto-describe: off = describe only when asked (Describe button, "neuro describe") */}
+           <div className="flex items-center justify-between gap-4 rounded-xl bg-surface-elevated px-4 py-3">
+             <div>
+               <label htmlFor="auto-describe" className="text-sm font-medium text-foreground">
+                 Auto-describe
+               </label>
+               <p id="auto-describe-help" className="text-xs text-muted-foreground">
+                 Keep describing the scene on its own. Off: only when you tap Describe or say "neuro describe".
+               </p>
+             </div>
+             <Switch
+               id="auto-describe"
+               checked={autoDescribe}
+               onCheckedChange={onAutoDescribeChange}
+               aria-describedby="auto-describe-help"
+             />
+           </div>
+ 
+           {/* Demo mode: scripted people, captions and hazards, so the HUD can be shown without the backend */}
+           <div className="flex items-center justify-between gap-4 rounded-xl bg-surface-elevated px-4 py-3">
+             <div>
+               <label htmlFor="demo-mode" className="text-sm font-medium text-foreground">
+                 Demo mode (fake people & events)
+               </label>
+               <p id="demo-mode-help" className="text-xs text-muted-foreground">
+                 Shows a pretend familiar face, captions and a hazard. No camera frames are sent while it's on.
+               </p>
+             </div>
+             <Switch
+               id="demo-mode"
+               checked={demoMode}
+               onCheckedChange={onDemoModeChange}
+               aria-describedby="demo-mode-help"
+             />
            </div>
  
            <div className="pt-2">

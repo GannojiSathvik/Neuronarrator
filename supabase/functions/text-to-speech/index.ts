@@ -15,6 +15,11 @@ function badRequest(message: string): Response {
 // bulbul:v2 (and its speakers "anushka"/"abhilash") was deprecated by Sarvam. Clients still
 // send the old names, so map them to comparable bulbul:v3 voices.
 const SPEAKERS: Record<string, string> = { anushka: "priya", abhilash: "rahul" };
+// The app's narration voice and speed can be changed without a redeploy:
+//   npx supabase secrets set TTS_SPEAKER=kavya TTS_PACE=0.85
+// bulbul:v3 has no pitch control, so a calmer voice comes from the speaker and a slower pace (0.5–2).
+const NARRATION_SPEAKER = Deno.env.get('TTS_SPEAKER');
+const PACE = Math.min(2, Math.max(0.5, Number(Deno.env.get('TTS_PACE')) || 0.9));
 
 // Simple in-memory rate limiter: max 1 request per 2 seconds per client
 const lastRequestTime = new Map<string, number>();
@@ -97,10 +102,10 @@ serve(async (req) => {
         body: JSON.stringify({
           text: truncatedText,
           language_code: "en-IN",
-          speaker: SPEAKERS[speaker],
+          speaker: (speaker === "anushka" && NARRATION_SPEAKER) || SPEAKERS[speaker],
           model: "bulbul:v3",
-          pace: 1.1,
-          speech_sample_rate: 22050,
+          pace: PACE,
+          speech_sample_rate: 24000,
         }),
       });
     } catch (fetchErr) {

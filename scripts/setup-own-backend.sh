@@ -209,7 +209,7 @@ FUNCTIONS=(analyze-image text-to-speech speech-to-text)
 # Captured values. Deliberately NOT named like the .env keys, so the library's
 # "Enter keeps current" default never silently offers the teammate's values.
 NEW_PROJECT_REF=""; NEW_SUPABASE_URL=""; NEW_PUBLISHABLE_KEY=""
-GROQ_KEY=""; SARVAM_KEY=""; ANTHROPIC_KEY=""
+GROQ_KEY=""; GEMINI_KEY=""; SARVAM_KEY=""; ANTHROPIC_KEY=""
 SECRETS_TMP=""
 
 # If anything goes wrong, never leave a key file behind.
@@ -324,37 +324,44 @@ printf '  %s✓%s got it (kept in memory; written to .env in stage 9)\n' "$GREEN
 pause "Press Enter to continue"
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
-stage "Get a Groq API key (required)"
-say "analyze-image sends camera frames to Groq's vision model, so it needs a Groq key."
+stage "Get your free AI keys: Groq (recommended) and Gemini"
+say "analyze-image describes camera frames with Groq first, then Gemini, then Claude."
+say "speech-to-text uses Groq Whisper when a Groq key is set."
 note "API key = a password that lets a program use a paid/free service on your account."
-note "Groq has a free tier; no card needed at the time of writing."
-open_url "https://console.groq.com/keys"
-step "Sign up / sign in."
-step "Click 'Create API Key', name it 'neuronarrator', and copy it (starts gsk_)."
-step "Groq shows it only once. If you lose it, just create another."
+note "You need AT LEAST ONE of Groq, Gemini or Anthropic. Groq + Gemini are both free"
+note "tiers, and having both means one can cover when the other is busy."
+printf '\n'
+say "${BOLD}Groq${RESET} (recommended: vision + speech-to-text, free tier, no card needed)"
+if confirm "Open the Groq console to get a key?"; then
+  open_url "https://console.groq.com/keys"
+  step "Sign up / sign in."
+  step "Click 'Create API Key', name it 'neuronarrator', and copy it (starts gsk_)."
+  step "Groq shows it only once. If you lose it, just create another."
+fi
 note "Your typing will be hidden. The key stays in this script's memory only."
-while [[ -z "$GROQ_KEY" ]]; do
-  ask_secret GROQ_KEY "Paste your Groq API key:"
-  GROQ_KEY="$(printf '%s' "$GROQ_KEY" | tr -d '[:space:]')"
-  [[ -z "$GROQ_KEY" ]] && warn "The Groq key is required for the vision feature."
-done
+ask_secret GROQ_KEY "Paste your Groq API key (Enter to skip):"
+GROQ_KEY="$(printf '%s' "$GROQ_KEY" | tr -d '[:space:]')"
 check_prefix "$GROQ_KEY" "gsk_" "A Groq key"
-printf '  %s✓%s Groq key captured (%s characters)\n' "$GREEN" "$RESET" "${#GROQ_KEY}"
+printf '\n'
+say "${BOLD}Gemini${RESET} (Google AI Studio: free tier, vision backup)"
+note "Free-tier Flash models cost nothing, but Google may use free-tier requests to"
+note "improve its products. Camera frames would be sent to Google when Gemini answers."
+if confirm "Open Google AI Studio to get a key?"; then
+  open_url "https://aistudio.google.com/apikey"
+  step "Sign in with a Google account."
+  step "Click 'Create API key' (let it create a project if asked) and copy it (starts AIza)."
+fi
+ask_secret GEMINI_KEY "Paste your Gemini API key (Enter to skip):"
+GEMINI_KEY="$(printf '%s' "$GEMINI_KEY" | tr -d '[:space:]')"
+check_prefix "$GEMINI_KEY" "AIza" "A Gemini key"
+[[ -n "$GROQ_KEY" ]]   && printf '  %s✓%s Groq key captured (%s characters)\n' "$GREEN" "$RESET" "${#GROQ_KEY}"
+[[ -n "$GEMINI_KEY" ]] && printf '  %s✓%s Gemini key captured (%s characters)\n' "$GREEN" "$RESET" "${#GEMINI_KEY}"
 pause "Press Enter to continue"
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
-stage "Optional keys: Sarvam (voice) and Anthropic (vision fallback)"
+stage "Optional keys: Anthropic (vision fallback) and Sarvam (voice)"
 say "These are optional; press Enter to skip either one."
-note "Sarvam powers natural Indian-English voice (text-to-speech, speech-to-text)."
-note "Without it, the app falls back to your browser's built-in speech. That works fine."
-if confirm "Open the Sarvam dashboard to get a key?"; then
-  open_url "https://dashboard.sarvam.ai"
-  step "Sign in → API keys → create/copy a key."
-fi
-ask_secret SARVAM_KEY "Paste Sarvam API key (Enter to skip):"
-SARVAM_KEY="$(printf '%s' "$SARVAM_KEY" | tr -d '[:space:]')"
-printf '\n'
-note "Anthropic (Claude) is a backup vision model used only if every Groq model fails."
+note "Anthropic (Claude) is a backup vision model used only if Groq and Gemini fail."
 note "Anthropic has no free tier: it needs billing set up. Skipping is normal."
 if confirm "Open the Anthropic console to get a key?"; then
   open_url "https://console.anthropic.com/settings/keys"
@@ -363,9 +370,23 @@ fi
 ask_secret ANTHROPIC_KEY "Paste Anthropic API key (Enter to skip):"
 ANTHROPIC_KEY="$(printf '%s' "$ANTHROPIC_KEY" | tr -d '[:space:]')"
 check_prefix "$ANTHROPIC_KEY" "sk-ant-" "An Anthropic key"
+printf '\n'
+note "Sarvam powers natural Indian-English text-to-speech, and is the speech-to-text"
+note "fallback when there's no Groq key. Without it, the app uses your browser's voice."
+if confirm "Open the Sarvam dashboard to get a key?"; then
+  open_url "https://dashboard.sarvam.ai"
+  step "Sign in → API keys → create/copy a key."
+fi
+ask_secret SARVAM_KEY "Paste Sarvam API key (Enter to skip):"
+SARVAM_KEY="$(printf '%s' "$SARVAM_KEY" | tr -d '[:space:]')"
 note "(LOVABLE_API_KEY is skipped on purpose: it only works inside Lovable Cloud.)"
-[[ -n "$SARVAM_KEY" ]]    && printf '  %s✓%s Sarvam key captured\n' "$GREEN" "$RESET"
 [[ -n "$ANTHROPIC_KEY" ]] && printf '  %s✓%s Anthropic key captured\n' "$GREEN" "$RESET"
+[[ -n "$SARVAM_KEY" ]]    && printf '  %s✓%s Sarvam key captured\n' "$GREEN" "$RESET"
+if [[ -z "$GROQ_KEY" && -z "$GEMINI_KEY" && -z "$ANTHROPIC_KEY" ]]; then
+  warn "No vision key given. You need at least one of Groq, Gemini or Anthropic."
+  warn "Re-run the wizard once you have one."
+  exit 1
+fi
 pause "Press Enter to continue"
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
@@ -401,17 +422,20 @@ say "Edge functions read keys from secrets, so the keys never ship to the browse
 note "How the keys travel: written to a temp file OUTSIDE the repo (in \$TMPDIR),"
 note "readable only by you (chmod 600), passed to the CLI with --env-file, then"
 note "deleted immediately. They are never on a command line, so never in history."
-names=("GROQ_API_KEY")
-[[ -n "$SARVAM_KEY" ]]    && names+=("SARVAM_API_KEY")
+names=()
+[[ -n "$GROQ_KEY" ]]      && names+=("GROQ_API_KEY")
+[[ -n "$GEMINI_KEY" ]]    && names+=("GEMINI_API_KEY")
 [[ -n "$ANTHROPIC_KEY" ]] && names+=("ANTHROPIC_API_KEY")
+[[ -n "$SARVAM_KEY" ]]    && names+=("SARVAM_API_KEY")
 say "Will set: ${names[*]}  (values hidden)"
 if confirm "Set these secrets on project ${NEW_PROJECT_REF}?"; then
   SECRETS_TMP="$(umask 077; mktemp "${TMPDIR:-/tmp}/nn-secrets.XXXXXX")"
   chmod 600 "$SECRETS_TMP"
   {
-    printf 'GROQ_API_KEY=%s\n' "$GROQ_KEY"
-    [[ -n "$SARVAM_KEY" ]]    && printf 'SARVAM_API_KEY=%s\n' "$SARVAM_KEY"
+    [[ -n "$GROQ_KEY" ]]      && printf 'GROQ_API_KEY=%s\n' "$GROQ_KEY"
+    [[ -n "$GEMINI_KEY" ]]    && printf 'GEMINI_API_KEY=%s\n' "$GEMINI_KEY"
     [[ -n "$ANTHROPIC_KEY" ]] && printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_KEY"
+    [[ -n "$SARVAM_KEY" ]]    && printf 'SARVAM_API_KEY=%s\n' "$SARVAM_KEY"
     true
   } > "$SECRETS_TMP"
   set +e
@@ -424,10 +448,10 @@ if confirm "Set these secrets on project ${NEW_PROJECT_REF}?"; then
   note "Check names (values are never shown, only a hash):"
   run npx --yes supabase secrets list --project-ref "$NEW_PROJECT_REF" || true
 else
-  SKIPPED+=("set secrets: npx supabase secrets set GROQ_API_KEY ... --project-ref ${NEW_PROJECT_REF}")
+  SKIPPED+=("set secrets: npx supabase secrets set --env-file <file> --project-ref ${NEW_PROJECT_REF} (${names[*]})")
 fi
 # The wizard no longer needs the keys in memory.
-GROQ_KEY=""; SARVAM_KEY=""; ANTHROPIC_KEY=""
+GROQ_KEY=""; GEMINI_KEY=""; SARVAM_KEY=""; ANTHROPIC_KEY=""
 pause "Press Enter to continue"
 
 # ── 8 ─────────────────────────────────────────────────────────────────────
@@ -506,7 +530,7 @@ pause "Press Enter to continue"
 
 # ── 10 ────────────────────────────────────────────────────────────────────
 stage "Smoke test: call analyze-image directly"
-say "This proves the deployed function + your Groq secret work before opening the app."
+say "This proves the deployed function + your vision key(s) work before opening the app."
 note "We send a tiny built-in 32x32 test image (red top, blue bottom) with curl."
 note "Expect HTTP 200 and JSON with a 'description'. The model may say something vague"
 note "about colours: that's fine; it means the whole chain works."
@@ -529,7 +553,8 @@ if confirm "Send the test request now?"; then
     404) warn "Function not found: the deploy in stage 8 didn't happen or failed." ;;
     401) warn "Unauthorized: wrong publishable key, or deployed without --no-verify-jwt." ;;
     500) warn "'API key not configured' means the secrets in stage 7 weren't set." ;;
-    503) warn "All vision models failed: check the Groq key, or Groq may be busy. Retry later." ;;
+    503) warn "All vision models failed: check your keys (Groq/Gemini/Anthropic) and the logs:"
+         note "dashboard → Edge Functions → analyze-image → Logs. Providers may also be busy." ;;
     000) warn "No response: check your internet connection and the project URL." ;;
     *)   warn "Unexpected result. Check logs: dashboard → Edge Functions → analyze-image → Logs." ;;
   esac
